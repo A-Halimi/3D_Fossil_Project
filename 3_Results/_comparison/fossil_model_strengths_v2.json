@@ -1,0 +1,245 @@
+{
+  "convnext": {
+    "strengths": [
+      "Alveolina recall=0.9971 (best 0.9992)",
+      "Alveolina precision=0.9514 (best 0.9848)",
+      "Arumella recall=0.9348 (best 0.9806)",
+      "Arumella precision=0.9966 (best 0.9985)",
+      "Ataxophragmium recall=0.9943 (best 0.9943)",
+      "Ataxophragmium precision=0.9929 (best 0.9958)",
+      "Baculogypsina precision=0.9958 (best 0.9972)",
+      "Chrysalidina recall=0.9325 (best 0.9988)",
+      "Chrysalidina precision=0.9425 (best 0.9450)",
+      "Coskinolina recall=0.9322 (best 0.9858)",
+      "Coskinolina precision=0.9962 (best 0.9962)",
+      "Elphidiella recall=0.9962 (best 0.9973)",
+      "Elphidiella precision=0.8502 (best 0.9735)",
+      "Fallotia recall=0.9994 (best 0.9994)",
+      "Fallotia precision=0.9964 (best 0.9996)",
+      "Lockhartia recall=0.9996 (best 0.9998)",
+      "Lockhartia precision=0.9640 (best 0.9991)",
+      "Minoxia recall=0.9829 (best 0.9904)",
+      "Minoxia precision=0.8896 (best 0.9922)",
+      "Orbitoides recall=0.8495 (best 0.9416)",
+      "Rhapydionina recall=0.9971 (best 0.9971)",
+      "Rhapydionina precision=0.9847 (best 0.9949)"
+    ],
+    "weaknesses": [
+      "Baculogypsina recall=0.0802 < best 0.4973 (-0.4171)",
+      "Orbitoides precision=0.6265 < best 0.7796 (-0.1531)"
+    ],
+    "notes": [
+      "Macro-F1=0.8770",
+      "Accuracy=0.9134",
+      "AUC=0.9926"
+    ]
+  },
+  "convnextl": {
+    "strengths": [
+      "Alveolina recall=0.9967 (best 0.9992)",
+      "Alveolina precision=0.9613 (best 0.9848)",
+      "Arumella recall=0.9773 (best 0.9806)",
+      "Arumella precision=0.9930 (best 0.9985)",
+      "Ataxophragmium recall=0.9890 (best 0.9943)",
+      "Ataxophragmium precision=0.9957 (best 0.9958)",
+      "Baculogypsina recall=0.4849 (best 0.4973)",
+      "Baculogypsina precision=0.9972 (best 0.9972)",
+      "Chrysalidina recall=0.9988 (best 0.9988)",
+      "Chrysalidina precision=0.9200 (best 0.9450)",
+      "Coskinolina recall=0.9858 (best 0.9858)",
+      "Coskinolina precision=0.9788 (best 0.9962)",
+      "Elphidiella recall=0.9962 (best 0.9973)",
+      "Elphidiella precision=0.9667 (best 0.9735)",
+      "Fallotia recall=0.9990 (best 0.9994)",
+      "Fallotia precision=0.9948 (best 0.9996)",
+      "Lockhartia recall=0.9998 (best 0.9998)",
+      "Lockhartia precision=0.9684 (best 0.9991)",
+      "Minoxia recall=0.8946 (best 0.9904)",
+      "Minoxia precision=0.9922 (best 0.9922)",
+      "Orbitoides recall=0.9416 (best 0.9416)",
+      "Orbitoides precision=0.7796 (best 0.7796)",
+      "Rhapydionina recall=0.9758 (best 0.9971)",
+      "Rhapydionina precision=0.9901 (best 0.9949)"
+    ],
+    "weaknesses": [],
+    "notes": [
+      "Macro-F1=0.9406",
+      "Accuracy=0.9512",
+      "AUC=0.9978"
+    ]
+  },
+  "effv2l": {
+    "strengths": [
+      "Alveolina recall=0.9969 (best 0.9992)",
+      "Alveolina precision=0.9298 (best 0.9848)",
+      "Arumella recall=0.9806 (best 0.9806)",
+      "Arumella precision=0.9967 (best 0.9985)",
+      "Ataxophragmium recall=0.9743 (best 0.9943)",
+      "Ataxophragmium precision=0.9958 (best 0.9958)",
+      "Baculogypsina precision=0.9197 (best 0.9972)",
+      "Chrysalidina recall=0.9978 (best 0.9988)",
+      "Chrysalidina precision=0.9450 (best 0.9450)",
+      "Coskinolina recall=0.9569 (best 0.9858)",
+      "Coskinolina precision=0.9719 (best 0.9962)",
+      "Elphidiella recall=0.9973 (best 0.9973)",
+      "Elphidiella precision=0.9735 (best 0.9735)",
+      "Fallotia recall=0.9972 (best 0.9994)",
+      "Fallotia precision=0.9707 (best 0.9996)",
+      "Lockhartia recall=0.9994 (best 0.9998)",
+      "Lockhartia precision=0.9928 (best 0.9991)",
+      "Minoxia recall=0.9904 (best 0.9904)",
+      "Minoxia precision=0.9868 (best 0.9922)",
+      "Orbitoides recall=0.8985 (best 0.9416)",
+      "Orbitoides precision=0.6909 (best 0.7796)",
+      "Rhapydionina recall=0.9077 (best 0.9971)",
+      "Rhapydionina precision=0.9866 (best 0.9949)"
+    ],
+    "weaknesses": [
+      "Baculogypsina recall=0.3305 < best 0.4973 (-0.1668)"
+    ],
+    "notes": [
+      "Macro-F1=0.9198",
+      "Accuracy=0.9353",
+      "AUC=0.9957"
+    ]
+  },
+  "effv2s": {
+    "strengths": [
+      "Alveolina recall=0.9990 (best 0.9992)",
+      "Alveolina precision=0.9442 (best 0.9848)",
+      "Arumella recall=0.8558 (best 0.9806)",
+      "Arumella precision=0.9968 (best 0.9985)",
+      "Ataxophragmium recall=0.9724 (best 0.9943)",
+      "Ataxophragmium precision=0.9919 (best 0.9958)",
+      "Baculogypsina recall=0.4973 (best 0.4973)",
+      "Baculogypsina precision=0.9966 (best 0.9972)",
+      "Chrysalidina recall=0.9108 (best 0.9988)",
+      "Chrysalidina precision=0.9229 (best 0.9450)",
+      "Coskinolina recall=0.9385 (best 0.9858)",
+      "Coskinolina precision=0.9806 (best 0.9962)",
+      "Elphidiella recall=0.9905 (best 0.9973)",
+      "Fallotia recall=0.9994 (best 0.9994)",
+      "Fallotia precision=0.9940 (best 0.9996)",
+      "Lockhartia recall=0.9981 (best 0.9998)",
+      "Lockhartia precision=0.9974 (best 0.9991)",
+      "Minoxia recall=0.9590 (best 0.9904)",
+      "Orbitoides precision=0.7169 (best 0.7796)",
+      "Rhapydionina recall=0.9708 (best 0.9971)",
+      "Rhapydionina precision=0.9914 (best 0.9949)"
+    ],
+    "weaknesses": [
+      "Elphidiella precision=0.7738 < best 0.9735 (-0.1997)",
+      "Minoxia precision=0.8083 < best 0.9922 (-0.1839)",
+      "Orbitoides recall=0.7623 < best 0.9416 (-0.1793)"
+    ],
+    "notes": [
+      "Macro-F1=0.9061",
+      "Accuracy=0.9182",
+      "AUC=0.9956"
+    ]
+  },
+  "mobilenet": {
+    "strengths": [
+      "Alveolina recall=0.9992 (best 0.9992)",
+      "Alveolina precision=0.9690 (best 0.9848)",
+      "Arumella recall=0.9561 (best 0.9806)",
+      "Arumella precision=0.9565 (best 0.9985)",
+      "Ataxophragmium recall=0.9871 (best 0.9943)",
+      "Ataxophragmium precision=0.9302 (best 0.9958)",
+      "Baculogypsina precision=0.9863 (best 0.9972)",
+      "Chrysalidina recall=0.8538 (best 0.9988)",
+      "Chrysalidina precision=0.9084 (best 0.9450)",
+      "Coskinolina recall=0.9733 (best 0.9858)",
+      "Coskinolina precision=0.8867 (best 0.9962)",
+      "Elphidiella recall=0.9959 (best 0.9973)",
+      "Fallotia recall=0.9986 (best 0.9994)",
+      "Fallotia precision=0.9990 (best 0.9996)",
+      "Lockhartia recall=0.9925 (best 0.9998)",
+      "Lockhartia precision=0.9991 (best 0.9991)",
+      "Minoxia recall=0.9005 (best 0.9904)",
+      "Minoxia precision=0.8853 (best 0.9922)",
+      "Rhapydionina recall=0.8593 (best 0.9971)",
+      "Rhapydionina precision=0.9903 (best 0.9949)"
+    ],
+    "weaknesses": [
+      "Baculogypsina recall=0.2889 < best 0.4973 (-0.2084)",
+      "Elphidiella precision=0.6237 < best 0.9735 (-0.3498)",
+      "Orbitoides recall=0.5904 < best 0.9416 (-0.3512)",
+      "Orbitoides precision=0.6000 < best 0.7796 (-0.1796)"
+    ],
+    "notes": [
+      "Macro-F1=0.8602",
+      "Accuracy=0.8802",
+      "AUC=0.9949"
+    ]
+  },
+  "nasnet": {
+    "strengths": [
+      "Alveolina recall=0.9912 (best 0.9992)",
+      "Alveolina precision=0.9340 (best 0.9848)",
+      "Arumella recall=0.9431 (best 0.9806)",
+      "Arumella precision=0.9985 (best 0.9985)",
+      "Ataxophragmium recall=0.9857 (best 0.9943)",
+      "Ataxophragmium precision=0.9926 (best 0.9958)",
+      "Baculogypsina recall=0.4413 (best 0.4973)",
+      "Baculogypsina precision=0.9748 (best 0.9972)",
+      "Chrysalidina recall=0.9922 (best 0.9988)",
+      "Chrysalidina precision=0.9104 (best 0.9450)",
+      "Coskinolina recall=0.9324 (best 0.9858)",
+      "Coskinolina precision=0.9545 (best 0.9962)",
+      "Elphidiella recall=0.9947 (best 0.9973)",
+      "Elphidiella precision=0.9317 (best 0.9735)",
+      "Fallotia recall=0.9994 (best 0.9994)",
+      "Fallotia precision=0.9984 (best 0.9996)",
+      "Lockhartia recall=0.9994 (best 0.9998)",
+      "Lockhartia precision=0.9781 (best 0.9991)",
+      "Minoxia recall=0.9592 (best 0.9904)",
+      "Minoxia precision=0.9685 (best 0.9922)",
+      "Orbitoides recall=0.8973 (best 0.9416)",
+      "Orbitoides precision=0.7393 (best 0.7796)",
+      "Rhapydionina recall=0.9269 (best 0.9971)",
+      "Rhapydionina precision=0.9949 (best 0.9949)"
+    ],
+    "weaknesses": [],
+    "notes": [
+      "Macro-F1=0.9254",
+      "Accuracy=0.9369",
+      "AUC=0.9958"
+    ]
+  },
+  "resnet101v2": {
+    "strengths": [
+      "Alveolina recall=0.9610 (best 0.9992)",
+      "Alveolina precision=0.9848 (best 0.9848)",
+      "Arumella recall=0.8803 (best 0.9806)",
+      "Arumella precision=0.9850 (best 0.9985)",
+      "Ataxophragmium recall=0.9749 (best 0.9943)",
+      "Baculogypsina precision=0.9601 (best 0.9972)",
+      "Coskinolina recall=0.9285 (best 0.9858)",
+      "Coskinolina precision=0.9621 (best 0.9962)",
+      "Elphidiella recall=0.9651 (best 0.9973)",
+      "Fallotia recall=0.9940 (best 0.9994)",
+      "Fallotia precision=0.9996 (best 0.9996)",
+      "Lockhartia recall=0.9963 (best 0.9998)",
+      "Lockhartia precision=0.9750 (best 0.9991)",
+      "Rhapydionina recall=0.9445 (best 0.9971)",
+      "Rhapydionina precision=0.9820 (best 0.9949)"
+    ],
+    "weaknesses": [
+      "Ataxophragmium precision=0.8310 < best 0.9958 (-0.1648)",
+      "Baculogypsina recall=0.1050 < best 0.4973 (-0.3923)",
+      "Chrysalidina recall=0.7625 < best 0.9988 (-0.2363)",
+      "Chrysalidina precision=0.6124 < best 0.9450 (-0.3326)",
+      "Elphidiella precision=0.7711 < best 0.9735 (-0.2024)",
+      "Minoxia recall=0.4911 < best 0.9904 (-0.4993)",
+      "Minoxia precision=0.7676 < best 0.9922 (-0.2246)",
+      "Orbitoides recall=0.7916 < best 0.9416 (-0.1500)",
+      "Orbitoides precision=0.6030 < best 0.7796 (-0.1766)"
+    ],
+    "notes": [
+      "Macro-F1=0.8083",
+      "Accuracy=0.8434",
+      "AUC=0.9835"
+    ]
+  }
+}

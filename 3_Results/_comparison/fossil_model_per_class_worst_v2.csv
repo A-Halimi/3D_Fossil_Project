@@ -1,0 +1,13 @@
+,worst_model,worst_score
+Alveolina,nasnet,0.9618
+Arumella,effv2s,0.9209
+Ataxophragmium,resnet101v2,0.8972
+Baculogypsina,convnext,0.1484
+Chrysalidina,resnet101v2,0.6792
+Coskinolina,mobilenet,0.928
+Elphidiella,mobilenet,0.767
+Fallotia,effv2l,0.9838
+Lockhartia,convnext,0.9815
+Minoxia,resnet101v2,0.599
+Orbitoides,mobilenet,0.5952
+Rhapydionina,mobilenet,0.9202

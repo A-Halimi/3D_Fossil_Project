@@ -1,0 +1,28 @@
+
+Overall Test Metrics
+====================
+Test Accuracy : 0.8434
+Top-3 Accuracy: 0.9740
+Test AUC      : 0.9835
+Macro-F1      : 0.8083
+
+Classification Report
+====================
+                precision    recall  f1-score   support
+
+     Alveolina     0.9848    0.9610    0.9728      5129
+      Arumella     0.9850    0.8803    0.9297      2163
+Ataxophragmium     0.8310    0.9749    0.8972      4898
+ Baculogypsina     0.9601    0.1050    0.1894      2980
+  Chrysalidina     0.6124    0.7625    0.6792      5111
+   Coskinolina     0.9621    0.9285    0.9450      5060
+   Elphidiella     0.7711    0.9651    0.8573      3385
+      Fallotia     0.9996    0.9940    0.9968      5009
+    Lockhartia     0.9750    0.9963    0.9855      5359
+       Minoxia     0.7676    0.4911    0.5990      3557
+    Orbitoides     0.6030    0.7916    0.6845      5015
+  Rhapydionina     0.9820    0.9445    0.9629      3802
+
+      accuracy                         0.8434     51468
+     macro avg     0.8695    0.8162    0.8083     51468
+  weighted avg     0.8635    0.8434    0.8279     51468

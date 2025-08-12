@@ -1,0 +1,88 @@
+## NEW FOSSIL SPECIES COLLECTION ANALYSIS  
+
+**Total number of unique species:** 27  
+**Total number of 3D models:** 97  
+
+---
+
+### Number of species with only one 3D model  
+**Count:** 10  
+- Amphistegina  
+- Cincoriola  
+- Dictyoconoides  
+- Dukhania  
+- Fissolephidium  
+- Heterostegina  
+- Miscellanea  
+- Omphalocyclus  
+- Peneroplis  
+- Rotalia  
+
+---
+
+### Number of species with two 3D models  
+**Count:** 4  
+- Coscinoidea  
+- Dictyoconus  
+- Glyphostomalloides  
+- Nummulites  
+
+---
+
+### Number of species with three 3D models  
+**Count:** 1  
+- Daviesina  
+
+---
+
+### Number of species with multiple 3D models (more than 3) – Best to use for creating train-val-test sets  
+**Count:** 12 
+
+These species are the strongest candidates for the ML-based classification task.  
+Their model counts allow for meaningful train-validation-test splits and still maintain some variation.  
+Species with 5+ models are especially valuable for avoiding overfitting.  
+ 
+- Chrysalidina — 16 models  
+- Ataxophragmium — 7 models  
+- Baculogypsina — 7 models  
+- Minoxia — 6 models  
+- Elphidiella — 6 models  
+- Fallotia — 6 models  
+- Arumella — 5 models  
+- Lockhartia — 5 models  
+- Orbitoides — 5 models  
+- Rhapydionina — 5 models  
+- Alveolina — 4 models  
+- Coskinolina — 4 models  
+
+---
+
+=== DETAILED BREAKDOWN ===
+### All species and their model counts  
+- Alveolina: 4 model(s)  
+- Amphistegina: 1 model(s)  
+- Arumella: 5 model(s)  
+- Ataxophragmium: 7 model(s)  
+- Baculogypsina: 7 model(s)  
+- Chrysalidina: 16 model(s)  
+- Cincoriola: 1 model(s)  
+- Coscinoidea: 2 model(s)  
+- Coskinolina: 4 model(s)  
+- Daviesina: 3 model(s)  
+- Dictyoconoides: 1 model(s)  
+- Dictyoconus: 2 model(s)  
+- Dukhania: 1 model(s)  
+- Elphidiella: 6 model(s)  
+- Fallotia: 6 model(s)  
+- Fissolephidium: 1 model(s)  
+- Glyphostomalloides: 2 model(s)  
+- Heterostegina: 1 model(s)  
+- Lockhartia: 5 model(s)  
+- Minoxia: 6 model(s)  
+- Miscellanea: 1 model(s)  
+- Nummulites: 2 model(s)  
+- Omphalocyclus: 1 model(s)  
+- Orbitoides: 5 model(s)  
+- Peneroplis: 1 model(s)  
+- Rhapydionina: 5 model(s)  
+- Rotalia: 1 model(s)  
