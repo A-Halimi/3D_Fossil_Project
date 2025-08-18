@@ -470,11 +470,16 @@ except ImportError:
 # --- FIX: Added robust device configuration with fallback for CUDA errors ---
 try:
     if torch.cuda.is_available():
-        # Attempt to use a CUDA device
-        device = torch.device("cuda:0")
-        # Perform a test operation to catch compatibility errors early
-        torch.tensor([1.0]).to(device)
-        print(f"✅ Successfully initialized CUDA device: {torch.cuda.get_device_name(device)}")
+        # Try CUDA:1 first
+        try:
+            device = torch.device("cuda:1")
+            torch.tensor([1.0]).to(device)
+            print(f"✅ Successfully initialized CUDA device: {torch.cuda.get_device_name(device)}")
+        except Exception:
+            # Fallback to CUDA:0
+            device = torch.device("cuda:0")
+            torch.tensor([1.0]).to(device)
+            print(f"✅ Successfully initialized CUDA device: {torch.cuda.get_device_name(device)}")
     else:
         device = torch.device("cpu")
         print("ℹ️ CUDA not available, using CPU.")
@@ -642,10 +647,23 @@ def normalize_to_01_torch(tensor):
     return tensor - min_val if (max_val - min_val) < 1e-8 else \
            (tensor - min_val) / (max_val - min_val + 1e-8)
 
-def apply_fossil_segmentation(slice_np, threshold=0.5, show_preview=False, return_mask=False):
+def apply_fossil_segmentation(slice_np, threshold=0.5, show_preview=False, return_mask=False, preserve_holes=True):
     """
-    Enhanced fossil segmentation that focuses purely on fossil content.
-    Returns segmented image with background completely removed (set to 0).
+    Enhanced fossil segmentation that preserves internal structure and holes.
+    
+    IMPROVED: Now preserves internal chambers, pores, and holes instead of filling them.
+    This maintains the diagnostic structural features that distinguish different fossil species.
+    
+    Args:
+        slice_np: Input grayscale image
+        threshold: Segmentation sensitivity 
+        show_preview: Whether to show segmentation preview
+        return_mask: Whether to return the binary mask
+        preserve_holes: Whether to preserve internal holes/chambers (NEW)
+    
+    Returns:
+        segmented: Segmented image with background removed
+        mask: Binary mask (if return_mask=True)
     """
     try:
         from skimage import filters, morphology, measure, segmentation
@@ -662,23 +680,19 @@ def apply_fossil_segmentation(slice_np, threshold=0.5, show_preview=False, retur
             mask_otsu = slice_np > np.mean(slice_np)
         
         # Method 2: User-controlled threshold (more aggressive)
-        # Make threshold more aggressive for better fossil isolation
         global_mean = np.mean(slice_np)
         global_std = np.std(slice_np)
-        # Use more aggressive thresholding - higher threshold = more selective
-        adaptive_threshold = global_mean + (threshold * 2.0) * global_std  # Doubled sensitivity
+        adaptive_threshold = global_mean + (threshold * 2.0) * global_std
         mask_adaptive = slice_np > adaptive_threshold
         
         # Method 3: Percentile-based thresholding (focus on top intensities)
-        # Focus on higher percentiles for fossil content
-        percentile_threshold = np.percentile(slice_np, 60 + threshold * 35)  # 60-95% range
+        percentile_threshold = np.percentile(slice_np, 60 + threshold * 35)
         mask_percentile = slice_np > percentile_threshold
         
         # Method 4: Histogram-based approach (isolate fossil peaks)
         hist, bins = np.histogram(slice_np.ravel(), bins=50)
-        peak_indices = np.where(hist > np.max(hist) * 0.1)[0]  # Find significant peaks
+        peak_indices = np.where(hist > np.max(hist) * 0.1)[0]
         if len(peak_indices) > 1:
-            # Use the higher intensity peak for fossils
             fossil_threshold = bins[peak_indices[-1]]
             mask_histogram = slice_np > fossil_threshold
         else:
@@ -694,69 +708,163 @@ def apply_fossil_segmentation(slice_np, threshold=0.5, show_preview=False, retur
         mask_combined = mask_votes >= 3
         
         # If too restrictive, fallback to 2/4 agreement
-        if np.sum(mask_combined) < slice_np.size * 0.05:  # Less than 5% of image
+        if np.sum(mask_combined) < slice_np.size * 0.05:
             mask_combined = mask_votes >= 2
         
-        # Enhanced cleanup for better fossil isolation
-        # Remove very small objects (noise)
+        # IMPROVED: Structure-preserving cleanup instead of aggressive hole filling
         if np.sum(mask_combined) > 0:
-            mask_cleaned = morphology.remove_small_objects(mask_combined, min_size=200)
+            # Remove very small noise objects but preserve larger internal structures
+            mask_cleaned = morphology.remove_small_objects(mask_combined, min_size=50)  # Reduced from 200
         else:
             mask_cleaned = mask_combined
         
-        # Fill holes in fossil structures
-        mask_filled = ndimage.binary_fill_holes(mask_cleaned)
+        # NEW: Conditional hole filling - preserve internal chambers and pores
+        if preserve_holes:
+            # Only fill very small holes (likely noise) but preserve larger internal structures
+            # Use a much smaller area threshold to maintain fossil architecture
+            try:
+                # Fill only tiny holes (noise) but preserve chambers/pores
+                mask_filled = morphology.remove_small_holes(mask_cleaned, area_threshold=20)  # Very small threshold
+                
+                # Additional check: if hole filling removed too much structure, revert
+                original_holes = np.sum(~mask_cleaned & (mask_cleaned | morphology.binary_dilation(mask_cleaned, morphology.disk(2))))
+                filled_holes = np.sum(mask_filled) - np.sum(mask_cleaned)
+                
+                # If we filled too many holes (more than 5% of image), it's probably removing important structure
+                if filled_holes > slice_np.size * 0.05:
+                    # st.write("  🔍 Preserving internal structure - skipping aggressive hole filling")
+                    mask_filled = mask_cleaned
+                
+            except Exception:
+                # Fallback to no hole filling if operation fails
+                mask_filled = mask_cleaned
+        else:
+            # Original aggressive hole filling for comparison
+            mask_filled = ndimage.binary_fill_holes(mask_cleaned)
         
-        # Get the largest connected component (main fossil body)
+        # Get connected components and analyze them
         labeled = measure.label(mask_filled)
         if labeled.max() > 0:
-            # Find the largest component
-            component_sizes = np.bincount(labeled.flat)[1:]  # Exclude background (0)
-            largest_idx = component_sizes.argmax() + 1
-            largest_cc = (labeled == largest_idx)
+            # Analyze component properties to select the best fossil representation
+            props = measure.regionprops(labeled, intensity_image=original)
             
-            # If the largest component is too small, include more components
-            if np.sum(largest_cc) < slice_np.size * 0.02:  # Less than 2%
-                # Include top 2-3 largest components
-                sorted_indices = np.argsort(component_sizes)[::-1]
+            # Sort components by a combination of size and intensity
+            component_scores = []
+            for prop in props:
+                # Score based on area, mean intensity, and shape characteristics
+                area_score = prop.area
+                intensity_score = prop.mean_intensity if hasattr(prop, 'mean_intensity') else np.mean(original[labeled == prop.label])
+                
+                # Prefer components that are not too elongated (more fossil-like)
+                if prop.major_axis_length > 0:
+                    aspect_ratio = prop.minor_axis_length / prop.major_axis_length
+                    shape_score = min(aspect_ratio, 1.0)  # Prefer more compact shapes
+                else:
+                    shape_score = 1.0
+                
+                # Combined score favoring larger, brighter, more compact components
+                combined_score = area_score * intensity_score * shape_score
+                component_scores.append((prop.label, combined_score, area_score))
+            
+            # Select the best component(s)
+            if component_scores:
+                # Sort by combined score
+                component_scores.sort(key=lambda x: x[1], reverse=True)
+                
+                # Include the best component and any other substantial components
                 final_mask = np.zeros_like(labeled, dtype=bool)
-                for i in range(min(3, len(sorted_indices))):
-                    comp_idx = sorted_indices[i] + 1
-                    final_mask |= (labeled == comp_idx)
+                best_score = component_scores[0][1]
+                best_area = component_scores[0][2]
+                
+                for label, score, area in component_scores:
+                    # Include components that are either very good or substantial in size
+                    if score >= best_score * 0.3 and area >= best_area * 0.1:
+                        final_mask |= (labeled == label)
+                    
+                    # Don't include too many small components
+                    if np.sum(final_mask) > slice_np.size * 0.8:
+                        break
             else:
-                final_mask = largest_cc
+                final_mask = mask_filled
         else:
             final_mask = mask_filled
         
-        # Enhanced morphological operations for cleaner fossil boundaries
-        final_mask = morphology.binary_opening(final_mask, morphology.disk(2))
-        final_mask = morphology.binary_closing(final_mask, morphology.disk(4))
+        # IMPROVED: Gentler morphological operations to preserve fine structure
+        # Use smaller structuring elements to avoid destroying internal features
+        final_mask = morphology.binary_opening(final_mask, morphology.disk(1))  # Reduced from 2
         
-        # Apply the mask to extract pure fossil content
+        # Only apply closing if we're not preserving holes, or use very gentle closing
+        if preserve_holes:
+            # Very gentle closing to smooth boundaries without filling important holes
+            final_mask = morphology.binary_closing(final_mask, morphology.disk(2))
+        else:
+            # Original aggressive closing
+            final_mask = morphology.binary_closing(final_mask, morphology.disk(4))
+        
+        # Apply the mask to extract fossil content with preserved internal structure
         segmented = original * final_mask
         
-        # Enhanced preview with detailed statistics
+        # Enhanced preview with structural analysis
         if show_preview:
             segmented_display = np.zeros_like(original)
             segmented_display[final_mask] = original[final_mask]
-            st.image(segmented_display, caption="✨ Segmented Fossil", use_container_width=True, clamp=True)
-                
-            # Detailed statistics
+            
+            # Create comparison view
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.image(original, caption="📸 Original Image", use_container_width=True)
+            
+            with col2:
+                st.image(final_mask.astype(float), caption="🎯 Structure-Preserving Mask", use_container_width=True)
+            
+            with col3:
+                st.image(segmented_display, caption="✨ Segmented with Internal Structure", use_container_width=True)
+            
+            # Enhanced statistics with structural analysis
             fossil_pixels = np.sum(final_mask)
             total_pixels = final_mask.size
             fossil_percentage = (fossil_pixels / total_pixels) * 100
             
-            # Calculate intensity statistics for fossil vs background
+            # Analyze internal structure preservation
+            if preserve_holes:
+                # Count holes/chambers (connected components in the inverse mask within the fossil region)
+                inverse_mask = ~final_mask
+                fossil_bbox = measure.regionprops(final_mask.astype(int))[0].bbox if np.any(final_mask) else (0, 0, final_mask.shape[0], final_mask.shape[1])
+                roi_inverse = inverse_mask[fossil_bbox[0]:fossil_bbox[2], fossil_bbox[1]:fossil_bbox[3]]
+                
+                try:
+                    internal_holes = measure.label(roi_inverse)
+                    num_holes = internal_holes.max()
+                    
+                    if num_holes > 0:
+                        hole_areas = [np.sum(internal_holes == i) for i in range(1, num_holes + 1)]
+                        significant_holes = len([area for area in hole_areas if area > 10])  # Holes larger than 10 pixels
+                    else:
+                        significant_holes = 0
+                        
+                except Exception:
+                    significant_holes = 0
+                    num_holes = 0
+                
+                structure_info = f"🏛️ **Internal Structure Preserved:**\n" \
+                               f"- Total internal features: {num_holes}\n" \
+                               f"- Significant chambers/pores: {significant_holes}\n" \
+                               f"- Hole preservation mode: {'ENABLED' if preserve_holes else 'DISABLED'}"
+            else:
+                structure_info = "🔄 **Aggressive hole filling:** Internal chambers filled"
+            
+            # Calculate intensity statistics
             fossil_intensity = np.mean(original[final_mask]) if fossil_pixels > 0 else 0
             background_intensity = np.mean(original[~final_mask]) if np.sum(~final_mask) > 0 else 0
             contrast_ratio = fossil_intensity / (background_intensity + 1e-8)
             
-            st.success(f"🎯 **Enhanced Segmentation Results:**\n"
+            st.success(f"🎯 **Enhanced Structure-Preserving Segmentation:**\n"
                       f"- Fossil pixels: {fossil_pixels:,} ({fossil_percentage:.1f}% of image)\n"
                       f"- Fossil intensity: {fossil_intensity:.3f}\n"
                       f"- Background intensity: {background_intensity:.3f}\n"
                       f"- Contrast ratio: {contrast_ratio:.2f}x\n"
-                      f"- Pure fossil-only matching enabled!")
+                      f"{structure_info}")
         
         if return_mask:
             return segmented, final_mask
@@ -767,6 +875,18 @@ def apply_fossil_segmentation(slice_np, threshold=0.5, show_preview=False, retur
         st.warning("⚠️ Enhanced segmentation requires scikit-image. Using simple thresholding.")
         threshold_val = np.mean(slice_np) + threshold * np.std(slice_np)
         mask = slice_np > threshold_val
+        
+        # Even in fallback, try to preserve some structure
+        if preserve_holes:
+            # Don't fill holes in fallback mode
+            pass
+        else:
+            # Fill holes only if requested
+            try:
+                mask = ndimage.binary_fill_holes(mask)
+            except Exception:
+                pass
+        
         segmented = slice_np * mask
         if return_mask:
             return segmented, mask
@@ -826,7 +946,7 @@ def new_segment_image(img_gray, assume_bright_fossil=True, invert_output=False, 
         return None, False
 
 
-def segment_volume_slice(volume_slice, threshold=0.5):
+def segment_volume_slice(volume_slice, threshold=0.5, preserve_holes=True):
     """
     Apply enhanced segmentation to volume slices for fair fossil-to-fossil comparison.
     Uses the same aggressive approach as input slice segmentation.
@@ -891,8 +1011,16 @@ def segment_volume_slice(volume_slice, threshold=0.5):
         else:
             mask_cleaned = mask_combined
         
-        # Fill holes in fossil structures
-        mask_filled = ndimage.binary_fill_holes(mask_cleaned)
+        # Conditional hole filling - preserve internal structure if requested
+        if preserve_holes:
+            # Only fill very small holes (likely noise) but preserve larger internal structures
+            try:
+                mask_filled = morphology.remove_small_holes(mask_cleaned, area_threshold=20)
+            except Exception:
+                mask_filled = mask_cleaned
+        else:
+            # Original aggressive hole filling
+            mask_filled = ndimage.binary_fill_holes(mask_cleaned)
         
         # Handle multiple fossil components in volume slices
         labeled = measure.label(mask_filled)
@@ -1046,38 +1174,51 @@ def create_gaussian_window(window_size=11, sigma=1.5, channels=1):
 
 def ssim_torch(img1, img2, window_size: int = 11, data_range: float = 1.0):
     """Structural SIMilarity for two single‑channel images"""
-    if not torch.is_tensor(img1):
-        img1 = torch.from_numpy(img1).float()
-    if not torch.is_tensor(img2):
-        img2 = torch.from_numpy(img2).float()
+    try:
+        if not torch.is_tensor(img1):
+            img1 = torch.from_numpy(img1).float()
+        if not torch.is_tensor(img2):
+            img2 = torch.from_numpy(img2).float()
 
-    if img1.dim() == 2: 
-        img1 = img1[None, None]
-    if img2.dim() == 2: 
-        img2 = img2[None, None]
-    img1, img2 = img1.to(img2.dtype), img2
+        if img1.dim() == 2: 
+            img1 = img1[None, None]
+        if img2.dim() == 2: 
+            img2 = img2[None, None]
+        img1, img2 = img1.to(img2.dtype), img2
 
-    img1 = (img1 - img1.min()) / (img1.max() - img1.min() + 1e-8) * data_range
-    img2 = (img2 - img2.min()) / (img2.max() - img2.min() + 1e-8) * data_range
+        # Ensure images are on the same device
+        img1 = img1.to(img2.device)
 
-    window = create_gaussian_window(window_size, sigma=1.5).to(img1.device)
+        # Normalize to [0, data_range] range
+        img1 = (img1 - img1.min()) / (img1.max() - img1.min() + 1e-8) * data_range
+        img2 = (img2 - img2.min()) / (img2.max() - img2.min() + 1e-8) * data_range
 
-    C1 = (0.01 * data_range) ** 2
-    C2 = (0.03 * data_range) ** 2
-    pad = window_size // 2
+        window = create_gaussian_window(window_size, sigma=1.5).to(img1.device)
 
-    mu1 = F.conv2d(img1, weight=window, bias=None, stride=1, padding=pad, groups=1)
-    mu2 = F.conv2d(img2, weight=window, bias=None, stride=1, padding=pad, groups=1)
+        C1 = (0.01 * data_range) ** 2
+        C2 = (0.03 * data_range) ** 2
+        pad = window_size // 2
 
-    mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1*mu2
-    sigma1_sq = F.conv2d(img1*img1, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu1_sq
-    sigma2_sq = F.conv2d(img2*img2, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu2_sq
-    sigma12   = F.conv2d(img1*img2, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu1_mu2
+        mu1 = F.conv2d(img1, weight=window, bias=None, stride=1, padding=pad, groups=1)
+        mu2 = F.conv2d(img2, weight=window, bias=None, stride=1, padding=pad, groups=1)
 
-    num = (2*mu1_mu2 + C1) * (2*sigma12 + C2)
-    den = (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
-    ssim_map = num / den
-    return ssim_map.mean().clamp(-1, 1).item()
+        mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1*mu2
+        sigma1_sq = F.conv2d(img1*img1, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu1_sq
+        sigma2_sq = F.conv2d(img2*img2, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu2_sq
+        sigma12   = F.conv2d(img1*img2, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu1_mu2
+
+        num = (2*mu1_mu2 + C1) * (2*sigma12 + C2)
+        den = (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
+        ssim_map = num / den
+        
+        # SSIM should be in range [0, 1], not [-1, 1]
+        ssim_value = ssim_map.mean().clamp(0, 1).item()
+        return ssim_value
+        
+    except Exception as e:
+        # Return a reasonable default value if computation fails
+        print(f"SSIM computation error: {e}")
+        return 0.0
 
 def ncc_torch(img1, img2):
     f1, f2 = img1.view(-1), img2.view(-1)
@@ -1089,6 +1230,1435 @@ def ncc_torch(img1, img2):
 def combined_similarity_torch(ssim_val, ncc_val, w_ssim=0.5, w_ncc=0.5):
     ssim_norm = (ssim_val+1)/2; ncc_norm = (ncc_val+1)/2
     return w_ssim*ssim_norm + w_ncc*ncc_norm
+
+# =================================================================
+# NEW: Two-Stage Coarse-to-Fine Matching Pipeline
+# =================================================================
+
+def dice_score_torch(mask1, mask2, smooth=1e-8):
+    """
+    Compute Dice Score between two binary masks.
+    Args:
+        mask1, mask2: Binary masks (torch tensors or numpy arrays)
+        smooth: Smoothing factor to avoid division by zero
+    Returns:
+        Dice score (float): Higher is better
+    """
+    if not torch.is_tensor(mask1):
+        mask1 = torch.from_numpy(mask1).float()
+    if not torch.is_tensor(mask2):
+        mask2 = torch.from_numpy(mask2).float()
+    
+    # Ensure masks are flattened for computation
+    mask1_flat = mask1.view(-1)
+    mask2_flat = mask2.view(-1)
+    
+    intersection = torch.sum(mask1_flat * mask2_flat)
+    union = torch.sum(mask1_flat) + torch.sum(mask2_flat)
+    
+    dice = (2.0 * intersection + smooth) / (union + smooth)
+    return dice.item()
+
+def compute_hu_moments(image_np):
+    """
+    Compute Hu Moments for shape description.
+    Args:
+        image_np: Grayscale image as numpy array
+    Returns:
+        hu_moments: Array of 7 Hu moment invariants
+    """
+    try:
+        import cv2
+        
+        # Ensure image is in correct format
+        if image_np.dtype != np.uint8:
+            image_np = (255 * (image_np - np.min(image_np)) / (np.max(image_np) - np.min(image_np) + 1e-8)).astype(np.uint8)
+        
+        # Compute moments
+        moments = cv2.moments(image_np)
+        
+        # Compute Hu moments
+        hu_moments = cv2.HuMoments(moments).flatten()
+        
+        # Apply log transformation to make them more comparable
+        hu_moments = -np.sign(hu_moments) * np.log10(np.abs(hu_moments) + 1e-10)
+        
+        return hu_moments
+    
+    except ImportError:
+        # Fallback: simple geometric moments if OpenCV not available
+        st.warning("⚠️ OpenCV not available. Using simplified moments.")
+        
+        # Create binary mask
+        binary_mask = image_np > np.mean(image_np)
+        
+        if np.sum(binary_mask) == 0:
+            return np.zeros(7)
+        
+        # Simple centroid and basic shape descriptors
+        y_coords, x_coords = np.where(binary_mask)
+        
+        if len(x_coords) == 0:
+            return np.zeros(7)
+        
+        centroid_x = np.mean(x_coords)
+        centroid_y = np.mean(y_coords)
+        
+        # Basic shape descriptors
+        area = len(x_coords)
+        perimeter = np.sum(binary_mask) - np.sum(binary_mask[1:-1, 1:-1])
+        
+        # Normalized moments (simplified)
+        m20 = np.sum((x_coords - centroid_x) ** 2) / area
+        m02 = np.sum((y_coords - centroid_y) ** 2) / area
+        m11 = np.sum((x_coords - centroid_x) * (y_coords - centroid_y)) / area
+        
+        # Simple invariants
+        eccentricity = (m20 + m02 + np.sqrt((m20 - m02)**2 + 4*m11**2)) / (m20 + m02 - np.sqrt((m20 - m02)**2 + 4*m11**2) + 1e-8)
+        
+        return np.array([area/1000, perimeter/100, eccentricity, m20/1000, m02/1000, m11/1000, 0])
+
+def hu_moments_distance(hu1, hu2):
+    """
+    Compute distance between two sets of Hu moments.
+    Lower distance indicates better match.
+    """
+    if len(hu1) != len(hu2):
+        return float('inf')
+    
+    # Use Euclidean distance
+    distance = np.sqrt(np.sum((hu1 - hu2) ** 2))
+    return distance
+
+def coarse_search_score(dice_val, hu_distance, w_dice=0.4, w_hu=0.6, max_hu_distance=10.0):
+    """
+    Compute coarse search score combining Dice and Hu moments.
+    
+    IMPROVED: Increased Hu moments weight from 0.3 to 0.6 for better rotation invariance.
+    The Hu Moments are theoretically rotation-invariant, so giving them more weight
+    improves shape similarity recognition over simple overlap.
+    
+    Args:
+        dice_val: Dice score (higher is better)
+        hu_distance: Hu moments distance (lower is better)  
+        w_dice, w_hu: Weights for Dice and Hu components (now favors Hu moments)
+        max_hu_distance: Maximum expected Hu distance for normalization
+    Returns:
+        Combined coarse score (higher is better)
+    """
+    # Convert Hu distance to similarity (higher is better)
+    hu_similarity = max(0, 1.0 - (hu_distance / max_hu_distance))
+    
+    # Combine weighted scores - now emphasizing shape similarity via Hu moments
+    coarse_score = w_dice * dice_val + w_hu * hu_similarity
+    
+    return coarse_score
+
+def orb_feature_matching(img1, img2, max_features=500, match_threshold=0.75):
+    """
+    Compute ORB (Oriented FAST and Rotated BRIEF) feature matching score between two images.
+    
+    ORB is a fast, effective, and patent-free feature detection algorithm that combines:
+    - FAST keypoint detector 
+    - BRIEF descriptor with orientation compensation
+    - Rotation invariance and scale invariance
+    
+    Args:
+        img1: First image (numpy array, grayscale)
+        img2: Second image (numpy array, grayscale) 
+        max_features: Maximum number of features to detect
+        match_threshold: Distance ratio threshold for good matches (Lowe's ratio)
+    
+    Returns:
+        orb_score: Feature matching score [0,1] (higher is better)
+        num_matches: Number of good feature matches found
+    """
+    try:
+        # Convert to uint8 if needed (ORB requires 8-bit images)
+        if img1.dtype != np.uint8:
+            img1 = ((img1 - img1.min()) / (img1.max() - img1.min() + 1e-8) * 255).astype(np.uint8)
+        if img2.dtype != np.uint8:
+            img2 = ((img2 - img2.min()) / (img2.max() - img2.min() + 1e-8) * 255).astype(np.uint8)
+            
+        # Initialize ORB detector with optimized parameters for fossil matching
+        orb = cv2.ORB_create(
+            nfeatures=max_features,      # Maximum number of features to retain
+            scaleFactor=1.2,             # Pyramid decimation ratio
+            nlevels=8,                   # Number of pyramid levels
+            edgeThreshold=31,            # Size of border where features are not detected
+            firstLevel=0,                # Level of pyramid to put source image to
+            WTA_K=2,                     # Number of points that produce each element of descriptor
+            scoreType=cv2.ORB_HARRIS_SCORE,  # Harris corner detector for better corner response
+            patchSize=31,                # Size of patch used for oriented BRIEF descriptor
+            fastThreshold=20             # Fast threshold for corner detection
+        )
+        
+        # Detect keypoints and compute descriptors
+        kp1, des1 = orb.detectAndCompute(img1, None)
+        kp2, des2 = orb.detectAndCompute(img2, None)
+        
+        # Check if descriptors were found
+        if des1 is None or des2 is None or len(des1) == 0 or len(des2) == 0:
+            return 0.0, 0
+            
+        # Create BFMatcher (Brute Force Matcher) with Hamming distance for binary descriptors
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        
+        # Find k=2 best matches for each descriptor (for ratio test)
+        if len(des1) >= 2 and len(des2) >= 2:
+            matches = bf.knnMatch(des1, des2, k=2)
+        else:
+            # Fallback for cases with very few features
+            matches = bf.match(des1, des2)
+            # Convert to knnMatch format
+            matches = [[m] for m in matches]
+        
+        # Apply Lowe's ratio test to filter good matches
+        good_matches = []
+        for match_pair in matches:
+            if len(match_pair) == 2:
+                m, n = match_pair
+                # Good match if distance ratio is below threshold
+                if m.distance < match_threshold * n.distance:
+                    good_matches.append(m)
+            elif len(match_pair) == 1:
+                # Only one match found, accept it (fallback case)
+                good_matches.append(match_pair[0])
+        
+        num_matches = len(good_matches)
+        
+        # Compute feature matching score
+        if num_matches == 0:
+            orb_score = 0.0
+        else:
+            # Normalize by total possible matches (considering both images' features)
+            max_possible_matches = min(len(kp1), len(kp2))
+            if max_possible_matches > 0:
+                # Base score from match ratio
+                match_ratio = num_matches / max_possible_matches
+                
+                # Bonus for high absolute number of matches (indicates rich feature content)
+                match_bonus = min(1.0, num_matches / 50.0)  # Bonus caps at 50 matches
+                
+                # Combined score with diminishing returns
+                orb_score = min(1.0, match_ratio * 0.7 + match_bonus * 0.3)
+            else:
+                orb_score = 0.0
+                
+        return orb_score, num_matches
+        
+    except Exception as e:
+        # Graceful fallback if ORB fails - show error in UI for debugging
+        st.write(f"    ⚠️ ORB feature matching error: {str(e)}")
+        return 0.0, 0
+
+def fine_tuning_score(dice_val, ncc_val, ssim_val=None, orb_val=None, 
+                     w_dice_fine=0.3, w_ncc_fine=0.25, w_ssim_fine=0.25, w_orb_fine=0.2):
+    """
+    Compute fine-tuning score combining Dice, NCC, SSIM, and ORB for enhanced structural sensitivity.
+    
+    ENHANCED: Now includes ORB feature matching for rotation-invariant structural analysis.
+    
+    Args:
+        dice_val: Dice score on masks (higher is better, [0,1])
+        ncc_val: NCC on grayscale images ([-1,1], normalized to [0,1]) 
+        ssim_val: SSIM on grayscale images ([0,1], higher is better)
+        orb_val: ORB feature matching score ([0,1], higher is better)
+        w_dice_fine: Weight for Dice component (shape overlap)
+        w_ncc_fine: Weight for NCC component (intensity correlation)
+        w_ssim_fine: Weight for SSIM component (structural similarity)
+        w_orb_fine: Weight for ORB component (feature-based matching)
+    Returns:
+        Combined fine-tuning score (higher is better, [0,1])
+    """
+    # Normalize NCC from [-1,1] to [0,1]
+    ncc_normalized = (ncc_val + 1.0) / 2.0
+    
+    # Check which metrics are available and compute weighted combination
+    if orb_val is not None and ssim_val is not None:
+        # Four-metric combination: Dice + NCC + SSIM + ORB
+        total_weight = w_dice_fine + w_ncc_fine + w_ssim_fine + w_orb_fine
+        if abs(total_weight - 1.0) > 1e-6:
+            # Normalize weights if they don't sum to 1
+            w_dice_fine /= total_weight
+            w_ncc_fine /= total_weight  
+            w_ssim_fine /= total_weight
+            w_orb_fine /= total_weight
+        
+        # Four-metric weighted combination
+        fine_score = (w_dice_fine * dice_val + 
+                     w_ncc_fine * ncc_normalized + 
+                     w_ssim_fine * ssim_val +
+                     w_orb_fine * orb_val)
+                     
+    elif ssim_val is not None:
+        # Three-metric combination: Dice + NCC + SSIM (legacy mode)
+        total_weight = w_dice_fine + w_ncc_fine + w_ssim_fine
+        if abs(total_weight - 1.0) > 1e-6:
+            # Normalize weights if they don't sum to 1
+            w_dice_fine /= total_weight
+            w_ncc_fine /= total_weight
+            w_ssim_fine /= total_weight
+        
+        # Three-metric weighted combination
+        fine_score = (w_dice_fine * dice_val + 
+                     w_ncc_fine * ncc_normalized + 
+                     w_ssim_fine * ssim_val)
+    else:
+        # Fallback to original two-metric combination
+        # Adjust weights to sum to 1.0
+        total_weight = w_dice_fine + w_ncc_fine
+        if abs(total_weight - 1.0) > 1e-6:
+            w_dice_fine /= total_weight
+            w_ncc_fine /= total_weight
+        
+        fine_score = w_dice_fine * dice_val + w_ncc_fine * ncc_normalized
+    
+    return fine_score
+
+def create_binary_mask(image, threshold_method='otsu'):
+    """
+    Create binary mask from grayscale image.
+    Args:
+        image: Input grayscale image (numpy array or torch tensor)
+        threshold_method: 'otsu', 'adaptive', or 'percentile'
+    Returns:
+        Binary mask as numpy array
+    """
+    try:
+        from skimage import filters
+        
+        # Convert to numpy if needed
+        if torch.is_tensor(image):
+            img_np = image.cpu().numpy()
+        else:
+            img_np = image.copy()
+        
+        # Ensure 2D
+        if img_np.ndim > 2:
+            img_np = img_np.squeeze()
+        
+        if threshold_method == 'otsu':
+            try:
+                threshold = filters.threshold_otsu(img_np)
+                binary_mask = img_np > threshold
+            except ValueError:
+                # Fallback to percentile if Otsu fails
+                threshold = np.percentile(img_np, 75)
+                binary_mask = img_np > threshold
+        
+        elif threshold_method == 'adaptive':
+            # Use mean + std approach
+            threshold = np.mean(img_np) + 0.5 * np.std(img_np)
+            binary_mask = img_np > threshold
+        
+        elif threshold_method == 'percentile':
+            threshold = np.percentile(img_np, 70)
+            binary_mask = img_np > threshold
+        
+        else:
+            # Default to simple mean threshold
+            threshold = np.mean(img_np)
+            binary_mask = img_np > threshold
+        
+        return binary_mask.astype(np.float32)
+    
+    except ImportError:
+        # Fallback without scikit-image
+        if torch.is_tensor(image):
+            img_np = image.cpu().numpy()
+        else:
+            img_np = image.copy()
+        
+        if img_np.ndim > 2:
+            img_np = img_np.squeeze()
+        
+        threshold = np.mean(img_np) + 0.5 * np.std(img_np)
+        binary_mask = (img_np > threshold).astype(np.float32)
+        
+        return binary_mask
+
+def stage1_coarse_search(volume_t, slice_t, axes=[0,1,2], fossil_area_threshold=0.05, 
+                        use_segmentation=False, segmentation_threshold=0.5):
+    """
+    Stage 1: Coarse Search for Initial Pose Estimation using Dice + Hu Moments.
+    
+    Args:
+        volume_t: 4D torch tensor (1,1,D,H,W) - the 3D volume
+        slice_t: 4D torch tensor (1,1,H,W) - the query slice
+        axes: List of axes to search (0=axial, 1=coronal, 2=sagittal)
+        fossil_area_threshold: Minimum fossil content ratio for valid slices
+        use_segmentation: Whether to apply advanced segmentation to volume slices
+        segmentation_threshold: Threshold for segmentation (if enabled)
+    
+    Returns:
+        initial_pose: Dict containing best (axis, index) and score
+    """
+    best_coarse = {"score": -1, "axis": None, "index": None, "dice": 0, "hu_distance": float('inf')}
+    
+    D, H, W = volume_t.shape[2:]
+    h_s, w_s = slice_t.shape[2:]
+    
+    # Convert volume to numpy for mask calculation
+    vol_np = volume_t.cpu().numpy()[0, 0]
+    
+    # Build fossil mask for valid slice detection
+    thr = smart_threshold(vol_np)
+    try:
+        mask, bbox = build_fossil_mask(vol_np, thr)
+    except (ValueError, IndexError) as e:
+        st.warning(f"⚠️ Stage 1: Could not detect fossil content in volume: {e}")
+        return best_coarse
+    
+    # Create binary mask for query slice
+    slice_np = slice_t.cpu().numpy()[0, 0]
+    if use_segmentation:
+        # Apply the same advanced segmentation as used for uploaded image
+        segmented_query_slice = apply_fossil_segmentation(slice_np, segmentation_threshold, 
+                                                          show_preview=False, preserve_holes=preserve_holes)
+        query_mask = create_binary_mask(segmented_query_slice, 'otsu')
+        # st.write(f"  🎯 Using segmented query slice for Stage 1 coarse search")
+    else:
+        query_mask = create_binary_mask(slice_np, 'otsu')
+    
+    # Compute Hu moments for query slice (use segmented version if available)
+    query_slice_for_hu = segmented_query_slice if use_segmentation else slice_np
+    query_hu = compute_hu_moments(query_slice_for_hu)
+    
+    total_slices_checked = 0
+    valid_slices_found = 0
+    
+    for axis in axes:
+        # Get valid indices with fossil content
+        valid_indices = valid_idx(mask, axis, bbox)
+        
+        if len(valid_indices) == 0:
+            continue
+        
+        axis_name = ["axial", "coronal", "sagittal"][axis]
+        
+        for idx in valid_indices:
+            total_slices_checked += 1
+            
+            # Extract slice from volume
+            if axis == 0:  # Axial
+                vol_slice = volume_t[:, :, idx, :, :]
+            elif axis == 1:  # Coronal  
+                vol_slice = volume_t[:, :, :, idx, :].permute(0, 1, 3, 2)
+            else:  # Sagittal
+                vol_slice = volume_t[:, :, :, :, idx]
+            
+            # Resize to match query slice
+            if vol_slice.shape[2:] != (h_s, w_s):
+                vol_slice = F.interpolate(vol_slice, size=(h_s, w_s), mode='bilinear', align_corners=False)
+            
+            # Apply segmentation to volume slice if enabled (for consistency)
+            if use_segmentation:
+                vol_slice_segmented = segment_volume_slice(vol_slice, segmentation_threshold, preserve_holes)
+                vol_slice_np = vol_slice_segmented.cpu().numpy()[0, 0]
+            else:
+                vol_slice_np = vol_slice.cpu().numpy()[0, 0]
+            
+            # Create binary mask for volume slice
+            vol_mask = create_binary_mask(vol_slice_np, 'otsu')
+            
+            # Check if volume slice has reasonable fossil content
+            if np.sum(vol_mask) < vol_mask.size * 0.01:  # Less than 1% fossil content
+                continue
+                
+            valid_slices_found += 1
+            
+            # Compute Dice score
+            dice_val = dice_score_torch(query_mask, vol_mask)
+            
+            # Compute Hu moments and distance (use segmented version for consistency)
+            vol_hu = compute_hu_moments(vol_slice_np)
+            hu_dist = hu_moments_distance(query_hu, vol_hu)
+            
+            # Compute coarse score
+            coarse_score = coarse_search_score(dice_val, hu_dist)
+            
+            if coarse_score > best_coarse["score"]:
+                best_coarse.update({
+                    "score": coarse_score,
+                    "axis": axis,
+                    "index": idx,
+                    "dice": dice_val,
+                    "hu_distance": hu_dist,
+                    "slice_2d": vol_slice_segmented if use_segmentation else vol_slice.clone()
+                })
+    
+    # Debug output
+    seg_status = "with segmentation" if use_segmentation else "without segmentation"
+    st.write(f"  📊 Checked {total_slices_checked} slices, {valid_slices_found} had sufficient fossil content ({seg_status})")
+    if best_coarse["score"] > 0:
+        axis_name = ["axial", "coronal", "sagittal"][best_coarse["axis"]]
+        st.write(f"  🎯 Best coarse match: {axis_name} axis, slice {best_coarse['index']}")
+        st.write(f"  📈 Dice: {best_coarse['dice']:.4f}, Hu distance: {best_coarse['hu_distance']:.4f}")
+    
+    return best_coarse
+
+def rotate_image_torch(image_tensor, angle_degrees):
+    """
+    Rotate a 2D image tensor by the specified angle in degrees.
+    
+    Args:
+        image_tensor: 4D torch tensor (1,1,H,W) or 2D tensor (H,W)
+        angle_degrees: Rotation angle in degrees (positive = counter-clockwise)
+    
+    Returns:
+        Rotated image tensor with same dimensions as input
+    """
+    import torch
+    import torch.nn.functional as F
+    
+    # Ensure input is 4D
+    original_shape = image_tensor.shape
+    if len(original_shape) == 2:
+        image_4d = image_tensor.unsqueeze(0).unsqueeze(0)
+    elif len(original_shape) == 3:
+        image_4d = image_tensor.unsqueeze(0)
+    else:
+        image_4d = image_tensor
+    
+    # Convert angle to radians
+    angle_rad = torch.tensor(angle_degrees * np.pi / 180.0, dtype=torch.float32, device=image_tensor.device)
+    
+    # Create rotation matrix
+    cos_a = torch.cos(angle_rad)
+    sin_a = torch.sin(angle_rad)
+    
+    # Rotation matrix for counter-clockwise rotation
+    rotation_matrix = torch.tensor([
+        [cos_a, -sin_a, 0],
+        [sin_a, cos_a, 0]
+    ], dtype=torch.float32, device=image_tensor.device).unsqueeze(0)
+    
+    # Create affine grid
+    _, _, H, W = image_4d.shape
+    grid = F.affine_grid(rotation_matrix, (1, 1, H, W), align_corners=False)
+    
+    # Apply rotation
+    rotated = F.grid_sample(image_4d, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
+    
+    # Return in original shape format
+    if len(original_shape) == 2:
+        return rotated.squeeze()
+    elif len(original_shape) == 3:
+        return rotated.squeeze(0)
+    else:
+        return rotated
+
+
+def stage2_fine_tuning_with_rotation(volume_t, slice_t, initial_pose, search_radius=5, 
+                                   use_segmentation=False, segmentation_threshold=0.5,
+                                   rotation_angles=[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330],
+                                   preserve_holes=True,
+                                   w_dice_fine=0.3, w_ncc_fine=0.25, w_ssim_fine=0.25, w_orb_fine=0.2):
+    """
+    Enhanced Stage 2: Fine-Tuning with In-Plane Rotation Testing for Rotation Invariance.
+    
+    This function implements the BEST FIX suggested: Add In-Plane Rotation to the Fine-Tuning Stage.
+    For each candidate slice from the 3D volume, it tests multiple rotations and uses the best score.
+    
+    Args:
+        volume_t: 4D torch tensor (1,1,D,H,W) - the 3D volume
+        slice_t: 4D torch tensor (1,1,H,W) - the query slice
+        initial_pose: Dict from Stage 1 with initial (axis, index)
+        search_radius: Number of slices around initial pose to search
+        use_segmentation: Whether to apply advanced segmentation
+        segmentation_threshold: Threshold for segmentation (if enabled)
+        rotation_angles: List of angles to test for each candidate slice
+    
+    Returns:
+        final_pose: Dict containing optimized pose, final score, and best rotation
+    """
+    if initial_pose["axis"] is None or initial_pose["index"] is None:
+        return {"score": 0, "final_pose": None, "dice": 0, "ncc": 0, "ssim": 0, "orb": 0, "orb_matches": 0, "best_rotation": 0}
+    
+    best_fine = {"score": -1, "axis": None, "index": None, "dice": 0, "ncc": 0, "ssim": 0, "orb": 0, "orb_matches": 0, "best_rotation": 0}
+    
+    axis = initial_pose["axis"]
+    center_idx = initial_pose["index"]
+    D, H, W = volume_t.shape[2:]
+    h_s, w_s = slice_t.shape[2:]
+    
+    # Determine search range around initial pose
+    if axis == 0:  # Axial
+        max_idx = D - 1
+    elif axis == 1:  # Coronal
+        max_idx = H - 1
+    else:  # Sagittal
+        max_idx = W - 1
+    
+    start_idx = max(0, center_idx - search_radius)
+    end_idx = min(max_idx, center_idx + search_radius)
+    
+    # Create masks for query slice (use segmented version if enabled)
+    slice_np = slice_t.cpu().numpy()[0, 0]
+    if use_segmentation:
+        segmented_query_slice = apply_fossil_segmentation(slice_np, segmentation_threshold, 
+                                                          show_preview=False, preserve_holes=preserve_holes)
+        query_mask = create_binary_mask(segmented_query_slice, 'otsu')
+        # Use segmented version for NCC comparison too
+        query_slice_for_ncc = torch.from_numpy(segmented_query_slice[None, None]).float().to(slice_t.device)
+        query_slice_for_ncc = normalize_to_01_torch(query_slice_for_ncc)
+        # st.write(f"  🎯 Using segmented query slice for Stage 2 fine-tuning with rotation")
+    else:
+        query_mask = create_binary_mask(slice_np, 'otsu')
+        query_slice_for_ncc = slice_t
+    
+    # Search around initial pose with fine-tuning metric and rotation testing
+    slices_refined = 0
+    total_rotations_tested = 0
+    
+    # st.write(f"  🔄 Testing {len(rotation_angles)} rotations per slice for rotation invariance")
+    
+    for idx in range(start_idx, end_idx + 1):
+        slices_refined += 1
+        
+        # Extract slice from volume
+        if axis == 0:  # Axial
+            vol_slice = volume_t[:, :, idx, :, :]
+        elif axis == 1:  # Coronal
+            vol_slice = volume_t[:, :, :, idx, :].permute(0, 1, 3, 2)
+        else:  # Sagittal
+            vol_slice = volume_t[:, :, :, :, idx]
+        
+        # Resize to match query slice
+        if vol_slice.shape[2:] != (h_s, w_s):
+            vol_slice = F.interpolate(vol_slice, size=(h_s, w_s), mode='bilinear', align_corners=False)
+        
+        # Apply segmentation to volume slice if enabled (for consistency)
+        if use_segmentation:
+            vol_slice_segmented = segment_volume_slice(vol_slice, segmentation_threshold, preserve_holes)
+            vol_slice_np = vol_slice_segmented.cpu().numpy()[0, 0]
+            vol_slice_for_rotation = vol_slice_segmented  # Use segmented version for rotation
+        else:
+            vol_slice_np = vol_slice.cpu().numpy()[0, 0]
+            vol_slice_for_rotation = vol_slice
+        
+        # NEW: Test multiple rotations of the candidate slice
+        best_rotation_score = -1
+        best_rotation_angle = 0
+        best_rotation_dice = 0
+        best_rotation_ncc = 0
+        best_rotation_ssim = 0  # Track SSIM
+        best_rotation_orb = 0   # NEW: Track ORB
+        best_rotation_matches = 0  # NEW: Track ORB match count
+        best_rotated_slice = None
+        
+        for angle in rotation_angles:
+            total_rotations_tested += 1
+            
+            # Rotate the candidate slice from the volume
+            if angle == 0:
+                # No rotation needed
+                rotated_vol_slice = vol_slice_for_rotation
+            else:
+                # Apply rotation
+                rotated_vol_slice = rotate_image_torch(vol_slice_for_rotation, angle)
+            
+            # Create binary mask for rotated volume slice
+            rotated_vol_slice_np = rotated_vol_slice.cpu().numpy()[0, 0]
+            rotated_vol_mask = create_binary_mask(rotated_vol_slice_np, 'otsu')
+            
+            # Compute Dice score on masks
+            dice_val = dice_score_torch(query_mask, rotated_vol_mask)
+            
+            # Compute NCC on grayscale images
+            ncc_val = ncc_torch(query_slice_for_ncc, rotated_vol_slice)
+            
+            # Compute SSIM for structural similarity
+            try:
+                ssim_val = ssim_torch(query_slice_for_ncc, rotated_vol_slice)
+                if ssim_val is None or ssim_val == 0:
+                    st.write(f"    ⚠️ Debug: SSIM is {ssim_val} for angle {angle}°")
+            except Exception as e:
+                st.write(f"    ❌ SSIM computation failed for angle {angle}°: {e}")
+                ssim_val = 0.0
+            
+            # NEW: Compute ORB feature matching for rotation-invariant structural analysis
+            try:
+                query_slice_np = query_slice_for_ncc.cpu().numpy()[0, 0]
+                orb_score, num_matches = orb_feature_matching(query_slice_np, rotated_vol_slice_np)
+                # Debug: Show ORB computation for first few angles
+                if total_rotations_tested <= 3:
+                    # st.write(f"    🔍 ORB Debug - Angle {angle}°: Score={orb_score:.4f}, Matches={num_matches}")
+                    pass
+            except Exception as e:
+                st.write(f"    ❌ ORB feature matching failed for angle {angle}°: {e}")
+                orb_score = 0.0
+                num_matches = 0
+            
+            # Compute enhanced fine-tuning score with four metrics (Dice + NCC + SSIM + ORB)
+            fine_score = fine_tuning_score(dice_val, ncc_val, ssim_val, orb_score,
+                                         w_dice_fine=w_dice_fine, w_ncc_fine=w_ncc_fine, w_ssim_fine=w_ssim_fine, w_orb_fine=w_orb_fine)
+            
+            # Track the best rotation for this slice
+            if fine_score > best_rotation_score:
+                best_rotation_score = fine_score
+                best_rotation_angle = angle
+                best_rotation_dice = dice_val
+                best_rotation_ncc = ncc_val
+                best_rotation_ssim = ssim_val  # Track best SSIM
+                best_rotation_orb = orb_score   # NEW: Track best ORB
+                best_rotation_matches = num_matches  # NEW: Track ORB matches
+                best_rotated_slice = rotated_vol_slice.clone()
+        
+        # Update global best if this slice (with its best rotation) is better
+        if best_rotation_score > best_fine["score"]:
+            best_fine.update({
+                "score": best_rotation_score,
+                "axis": axis,
+                "index": idx,
+                "dice": best_rotation_dice,
+                "ncc": best_rotation_ncc,
+                "ssim": best_rotation_ssim,  # Include SSIM in results
+                "orb": best_rotation_orb,    # NEW: Include ORB in results
+                "orb_matches": best_rotation_matches,  # NEW: Include ORB match count
+                "best_rotation": best_rotation_angle,
+                "slice_2d": best_rotated_slice,
+                "final_pose": {"axis": axis, "index": idx, "rotation": best_rotation_angle}
+            })
+    
+    # Debug output with rotation information
+    axis_name = ["axial", "coronal", "sagittal"][axis]
+    seg_status = "with segmentation" if use_segmentation else "without segmentation"
+    # st.write(f"  🔧 Refined {slices_refined} slices around {axis_name} slice {center_idx} ({seg_status})")
+    # st.write(f"  🔄 Tested {total_rotations_tested} total rotations ({len(rotation_angles)} per slice)")
+    
+    if best_fine["score"] > 0:
+        improvement = best_fine["score"] - (initial_pose.get("score", 0) if "score" in initial_pose else 0)
+        # st.write(f"  ⬆️ Final slice {best_fine['index']} with {best_fine['best_rotation']}° rotation")
+        
+        # Display all four metrics in the score improvement message (commented out for cleaner UI)
+        # orb_info = f", ORB: {best_fine.get('orb', 0):.4f}" if 'orb' in best_fine else ""
+        # st.write(f"  📈 Score improved by {improvement:.4f} - Dice: {best_fine['dice']:.4f}, NCC: {best_fine['ncc']:.4f}, SSIM: {best_fine['ssim']:.4f}{orb_info}")
+        
+        # Show ORB feature matches if available (commented out for cleaner UI)
+        # if 'orb_matches' in best_fine and best_fine.get('orb_matches', 0) > 0:
+        #     st.write(f"  🔍 ORB Feature Matches: {best_fine['orb_matches']}")
+        
+        # if best_fine['best_rotation'] != 0:
+        #     st.success(f"  🎯 **Rotation Correction Applied:** {best_fine['best_rotation']}° improved the match!")
+    
+    return best_fine
+
+
+def stage2_fine_tuning(volume_t, slice_t, initial_pose, search_radius=5, 
+                      use_segmentation=False, segmentation_threshold=0.5, preserve_holes=True):
+    """
+    Stage 2: Fine-Tuning with 2D-to-3D Registration using Dice + NCC + SSIM + ORB.
+    This is the legacy implementation - updated to include ORB feature matching.
+    
+    ENHANCED: Now includes ORB feature matching for better structural analysis.
+    
+    Args:
+        volume_t: 4D torch tensor (1,1,D,H,W) - the 3D volume
+        slice_t: 4D torch tensor (1,1,H,W) - the query slice
+        initial_pose: Dict from Stage 1 with initial (axis, index)
+        search_radius: Number of slices around initial pose to search
+        use_segmentation: Whether to apply advanced segmentation
+        segmentation_threshold: Threshold for segmentation (if enabled)
+    
+    Returns:
+        final_pose: Dict containing optimized pose and final score
+    """
+    if initial_pose["axis"] is None or initial_pose["index"] is None:
+        return {"score": 0, "final_pose": None, "dice": 0, "ncc": 0, "ssim": 0, "orb": 0, "orb_matches": 0}
+    
+    best_fine = {"score": -1, "axis": None, "index": None, "dice": 0, "ncc": 0, "ssim": 0, "orb": 0, "orb_matches": 0}
+    
+    axis = initial_pose["axis"]
+    center_idx = initial_pose["index"]
+    D, H, W = volume_t.shape[2:]
+    h_s, w_s = slice_t.shape[2:]
+    
+    # Determine search range around initial pose
+    if axis == 0:  # Axial
+        max_idx = D - 1
+    elif axis == 1:  # Coronal
+        max_idx = H - 1
+    else:  # Sagittal
+        max_idx = W - 1
+    
+    start_idx = max(0, center_idx - search_radius)
+    end_idx = min(max_idx, center_idx + search_radius)
+    
+    # Create masks for query slice (use segmented version if enabled)
+    slice_np = slice_t.cpu().numpy()[0, 0]
+    if use_segmentation:
+        segmented_query_slice = apply_fossil_segmentation(slice_np, segmentation_threshold, 
+                                                          show_preview=False, preserve_holes=preserve_holes)
+        query_mask = create_binary_mask(segmented_query_slice, 'otsu')
+        # Use segmented version for NCC comparison too
+        query_slice_for_ncc = torch.from_numpy(segmented_query_slice[None, None]).float().to(slice_t.device)
+        query_slice_for_ncc = normalize_to_01_torch(query_slice_for_ncc)
+        # st.write(f"  🎯 Using segmented query slice for Stage 2 fine-tuning")
+    else:
+        query_mask = create_binary_mask(slice_np, 'otsu')
+        query_slice_for_ncc = slice_t
+    
+    # Search around initial pose with fine-tuning metric
+    slices_refined = 0
+    
+    for idx in range(start_idx, end_idx + 1):
+        slices_refined += 1
+        
+        # Extract slice from volume
+        if axis == 0:  # Axial
+            vol_slice = volume_t[:, :, idx, :, :]
+        elif axis == 1:  # Coronal
+            vol_slice = volume_t[:, :, :, idx, :].permute(0, 1, 3, 2)
+        else:  # Sagittal
+            vol_slice = volume_t[:, :, :, :, idx]
+        
+        # Resize to match query slice
+        if vol_slice.shape[2:] != (h_s, w_s):
+            vol_slice = F.interpolate(vol_slice, size=(h_s, w_s), mode='bilinear', align_corners=False)
+        
+        # Apply segmentation to volume slice if enabled (for consistency)
+        if use_segmentation:
+            vol_slice_segmented = segment_volume_slice(vol_slice, segmentation_threshold, preserve_holes)
+            vol_slice_np = vol_slice_segmented.cpu().numpy()[0, 0]
+            vol_slice_for_ncc = vol_slice_segmented  # Use segmented version for NCC too
+        else:
+            vol_slice_np = vol_slice.cpu().numpy()[0, 0]
+            vol_slice_for_ncc = vol_slice
+        
+        # Create binary mask for volume slice
+        vol_mask = create_binary_mask(vol_slice_np, 'otsu')
+        
+        # Compute Dice score on masks
+        dice_val = dice_score_torch(query_mask, vol_mask)
+        
+        # Compute NCC on grayscale images (both segmented if segmentation enabled)
+        ncc_val = ncc_torch(query_slice_for_ncc, vol_slice_for_ncc)
+        
+        # Compute SSIM for structural similarity
+        try:
+            ssim_val = ssim_torch(query_slice_for_ncc, vol_slice_for_ncc)
+            if ssim_val is None or ssim_val == 0:
+                st.write(f"    ⚠️ Debug: SSIM is {ssim_val} for slice {idx}")
+        except Exception as e:
+            st.write(f"    ❌ SSIM computation failed for slice {idx}: {e}")
+            ssim_val = 0.0
+            
+        # NEW: Compute ORB feature matching for structural analysis  
+        try:
+            query_slice_np = query_slice_for_ncc.cpu().numpy()[0, 0]
+            orb_score, num_matches = orb_feature_matching(query_slice_np, vol_slice_np)
+            # Debug: Show ORB computation for first few slices
+            if slices_refined <= 3:
+                # st.write(f"    🔍 ORB Debug - Slice {idx}: Score={orb_score:.4f}, Matches={num_matches}")
+                pass
+        except Exception as e:
+            st.write(f"    ❌ ORB feature matching failed for slice {idx}: {e}")
+            orb_score = 0.0
+            num_matches = 0
+        
+        # Compute enhanced fine-tuning score with four metrics (Dice + NCC + SSIM + ORB)
+        fine_score = fine_tuning_score(dice_val, ncc_val, ssim_val, orb_score,
+                                     w_dice_fine=w_dice_fine, w_ncc_fine=w_ncc_fine, w_ssim_fine=w_ssim_fine, w_orb_fine=w_orb_fine)
+        
+        if fine_score > best_fine["score"]:
+            best_fine.update({
+                "score": fine_score,
+                "axis": axis,
+                "index": idx,
+                "dice": dice_val,
+                "ncc": ncc_val,
+                "ssim": ssim_val,  # Include SSIM in results
+                "orb": orb_score,   # NEW: Include ORB in results
+                "orb_matches": num_matches,  # NEW: Include ORB match count
+                "slice_2d": vol_slice_segmented if use_segmentation else vol_slice.clone(),
+                "final_pose": {"axis": axis, "index": idx}
+            })
+    
+    # Debug output
+    axis_name = ["axial", "coronal", "sagittal"][axis]
+    seg_status = "with segmentation" if use_segmentation else "without segmentation"
+    # st.write(f"  🔧 Refined {slices_refined} slices around {axis_name} slice {center_idx} ({seg_status})")
+    if best_fine["score"] > 0:
+        improvement = best_fine["score"] - (initial_pose.get("score", 0) if "score" in initial_pose else 0)
+        # st.write(f"  ⬆️ Final slice {best_fine['index']}, score improved by {improvement:.4f}")
+        
+        # Display all four metrics including ORB (commented out for cleaner UI)
+        # orb_info = f", ORB: {best_fine.get('orb', 0):.4f}" if 'orb' in best_fine else ""
+        # st.write(f"  📈 Final metrics - Dice: {best_fine['dice']:.4f}, NCC: {best_fine['ncc']:.4f}, SSIM: {best_fine['ssim']:.4f}{orb_info}")
+        
+        # Show ORB feature matches if available (commented out for cleaner UI)
+        # if 'orb_matches' in best_fine and best_fine.get('orb_matches', 0) > 0:
+        #     st.write(f"  🔍 ORB Feature Matches: {best_fine['orb_matches']}")
+        pass
+    
+    return best_fine
+
+def stage2_fine_tuning_diagonal_candidate(volume_t, slice_t, diagonal_candidate, 
+                                        use_segmentation=False, segmentation_threshold=0.5,
+                                        preserve_holes=True,
+                                        w_dice_fine=0.3, w_ncc_fine=0.25, w_ssim_fine=0.25, w_orb_fine=0.2):
+    """
+    Stage 2 fine-tuning specifically for diagonal candidates.
+    Since diagonal slices are already optimal, we apply rotation testing to them.
+    """
+    # Use the diagonal slice directly from the candidate
+    diagonal_slice = diagonal_candidate["slice_2d"]
+    
+    # Create masks for query slice (use segmented version if enabled)
+    slice_np = slice_t.cpu().numpy()[0, 0]
+    if use_segmentation:
+        segmented_query_slice = apply_fossil_segmentation(slice_np, segmentation_threshold, 
+                                                          show_preview=False, preserve_holes=preserve_holes)
+        query_mask = create_binary_mask(segmented_query_slice, 'otsu')
+        query_slice_for_ncc = torch.from_numpy(segmented_query_slice[None, None]).float().to(slice_t.device)
+        query_slice_for_ncc = normalize_to_01_torch(query_slice_for_ncc)
+    else:
+        query_mask = create_binary_mask(slice_np, 'otsu')
+        query_slice_for_ncc = slice_t
+    
+    # Test rotations on the diagonal slice
+    rotation_angles = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
+    best_result = {"score": -1}
+    
+    for angle in rotation_angles:
+        try:
+            # Rotate the diagonal slice
+            rotated_slice = rotate_tensor_2d(diagonal_slice, angle)
+            
+            # Compute all four metrics
+            rotated_slice_np = rotated_slice.cpu().numpy()[0, 0]
+            
+            # Dice coefficient
+            rotated_mask = create_binary_mask(rotated_slice_np, 'otsu')
+            dice_val = dice_coefficient(query_mask, rotated_mask)
+            
+            # NCC
+            ncc_val = ncc_torch(query_slice_for_ncc, rotated_slice)
+            ncc_val = (ncc_val + 1) / 2  # Normalize to [0, 1]
+            
+            # SSIM
+            ssim_val = ssim_torch(query_slice_for_ncc, rotated_slice)
+            ssim_val = (ssim_val + 1) / 2  # Normalize to [0, 1]
+            
+            # ORB feature matching
+            query_slice_np = query_slice_for_ncc.cpu().numpy()[0, 0]
+            orb_score, num_matches = orb_feature_matching(query_slice_np, rotated_slice_np)
+            
+            # Compute fine-tuning score
+            fine_score = fine_tuning_score(dice_val, ncc_val, ssim_val, orb_score,
+                                         w_dice_fine=w_dice_fine, w_ncc_fine=w_ncc_fine, 
+                                         w_ssim_fine=w_ssim_fine, w_orb_fine=w_orb_fine)
+            
+            if fine_score > best_result["score"]:
+                best_result = {
+                    "score": fine_score,
+                    "axis": "diagonal",
+                    "angles": diagonal_candidate["angles"],
+                    "rotation": angle,
+                    "dice": dice_val,
+                    "ncc": ncc_val,
+                    "ssim": ssim_val,
+                    "orb": orb_score,
+                    "orb_matches": num_matches,
+                    "slice_2d": rotated_slice.clone()
+                }
+                
+        except Exception as e:
+            continue
+    
+    return best_result
+
+def multi_candidate_fine_tuning(volume_t, slice_t, axes=[0,1,2], fossil_area_threshold=0.05, 
+                               search_radius=5, use_segmentation=False, segmentation_threshold=0.5,
+                               enable_rotation_testing=True, preserve_holes=True, top_n_candidates=5,
+                               w_dice_fine=0.3, w_ncc_fine=0.25, w_ssim_fine=0.25, w_orb_fine=0.2,
+                               enable_diagonal=False, angle_list=None):
+    """
+    IMPROVED: Multi-Candidate Fine-Tuning Pipeline
+    
+    Conceptual Change:
+    - Modify the main matching loop to first run Stage 1 for all selected models
+    - Store the top N (e.g., top 5) initial poses based on their coarse_search_score
+    - Then, in a second loop, run the powerful stage2_fine_tuning_with_rotation on each candidate
+    - The final winner will be the candidate with the highest score after Stage 2
+    
+    This approach ensures that promising candidates aren't dismissed due to Stage 1 limitations,
+    and allows the sophisticated Stage 2 to make the final choice among multiple good options.
+    
+    Args:
+        volume_t: 4D torch tensor (1,1,D,H,W) - the 3D volume
+        slice_t: 4D torch tensor (1,1,H,W) - the query slice
+        axes: List of axes to search
+        fossil_area_threshold: Minimum fossil content for valid slices
+        search_radius: Fine-tuning search radius around coarse result
+        use_segmentation: Whether to apply advanced segmentation consistently
+        segmentation_threshold: Threshold for segmentation (if enabled)
+        enable_rotation_testing: Whether to test rotations in Stage 2
+        preserve_holes: Whether to preserve internal structure in segmentation
+        top_n_candidates: Number of candidates to pass from Stage 1 to Stage 2
+    
+    Returns:
+        final_result: Dict containing complete matching results with multi-candidate analysis
+    """
+    # Stage 1: Multi-Candidate Coarse Search
+    if use_segmentation:
+        # st.write(f"🔍 **Stage 1: Multi-Candidate Coarse Search** (Dice + Hu Moments) - Finding top {top_n_candidates} candidates with segmentation")
+        pass
+    else:
+        # st.write(f"🔍 **Stage 1: Multi-Candidate Coarse Search** (Dice + Hu Moments) - Finding top {top_n_candidates} candidates")
+        pass
+    
+    # Store ALL candidate poses from Stage 1
+    all_candidates = []
+    
+    D, H, W = volume_t.shape[2:]
+    h_s, w_s = slice_t.shape[2:]
+    
+    # Convert volume to numpy for mask calculation
+    vol_np = volume_t.cpu().numpy()[0, 0]
+    
+    # Build fossil mask for valid slice detection
+    thr = smart_threshold(vol_np)
+    try:
+        mask, bbox = build_fossil_mask(vol_np, thr)
+    except (ValueError, IndexError) as e:
+        st.warning(f"⚠️ Stage 1: Could not detect fossil content in volume: {e}")
+        return {
+            "mode": "multi_candidate_two_stage",
+            "stage1_candidates": [],
+            "stage2_results": [],
+            "final_score": 0,
+            "final_pose": None
+        }
+    
+    # Create binary mask for query slice
+    slice_np = slice_t.cpu().numpy()[0, 0]
+    if use_segmentation:
+        segmented_query_slice = apply_fossil_segmentation(slice_np, segmentation_threshold, 
+                                                          show_preview=False, preserve_holes=preserve_holes)
+        query_mask = create_binary_mask(segmented_query_slice, 'otsu')
+    else:
+        query_mask = create_binary_mask(slice_np, 'otsu')
+    
+    # Compute Hu moments for query slice
+    query_slice_for_hu = segmented_query_slice if use_segmentation else slice_np
+    query_hu = compute_hu_moments(query_slice_for_hu)
+    
+    total_slices_checked = 0
+    valid_slices_found = 0
+    
+    # IMPROVED: Search ALL valid slices across ALL axes to find multiple candidates
+    for axis in axes:
+        valid_indices = valid_idx(mask, axis, bbox)
+        
+        if len(valid_indices) == 0:
+            continue
+        
+        axis_name = ["axial", "coronal", "sagittal"][axis]
+        
+        for idx in valid_indices:
+            total_slices_checked += 1
+            
+            # Extract slice from volume
+            if axis == 0:  # Axial
+                vol_slice = volume_t[:, :, idx, :, :]
+            elif axis == 1:  # Coronal  
+                vol_slice = volume_t[:, :, :, idx, :].permute(0, 1, 3, 2)
+            else:  # Sagittal
+                vol_slice = volume_t[:, :, :, :, idx]
+            
+            # Resize to match query slice
+            if vol_slice.shape[2:] != (h_s, w_s):
+                vol_slice = F.interpolate(vol_slice, size=(h_s, w_s), mode='bilinear', align_corners=False)
+            
+            # Apply segmentation to volume slice if enabled
+            if use_segmentation:
+                vol_slice_segmented = segment_volume_slice(vol_slice, segmentation_threshold, preserve_holes)
+                vol_slice_np = vol_slice_segmented.cpu().numpy()[0, 0]
+            else:
+                vol_slice_np = vol_slice.cpu().numpy()[0, 0]
+            
+            # Create binary mask for volume slice
+            vol_mask = create_binary_mask(vol_slice_np, 'otsu')
+            
+            # Check if volume slice has reasonable fossil content
+            if np.sum(vol_mask) < vol_mask.size * 0.01:
+                continue
+                
+            valid_slices_found += 1
+            
+            # Compute Dice score
+            dice_val = dice_score_torch(query_mask, vol_mask)
+            
+            # Compute Hu moments and distance
+            vol_hu = compute_hu_moments(vol_slice_np)
+            hu_dist = hu_moments_distance(query_hu, vol_hu)
+            
+            # Compute coarse score
+            coarse_score = coarse_search_score(dice_val, hu_dist)
+            
+            # Store this candidate for potential Stage 2 processing
+            candidate = {
+                "score": coarse_score,
+                "axis": axis,
+                "index": idx,
+                "dice": dice_val,
+                "hu_distance": hu_dist,
+                "slice_2d": vol_slice_segmented if use_segmentation else vol_slice.clone(),
+                "candidate_id": f"{axis_name}_{idx}"  # Unique identifier
+            }
+            
+            all_candidates.append(candidate)
+    
+    # ENHANCED: Add diagonal search candidates if enabled
+    if enable_diagonal and angle_list is not None:
+        # st.write(f"🔍 **Enhanced Search**: Adding diagonal candidates using {len(angle_list)} optimized angles")
+        
+        D, H, W = volume_t.shape[2:]
+        center = ((W-1)/2, (H-1)/2, (D-1)/2)
+        out_shape = slice_t.shape[2:]
+        
+        diagonal_candidates_checked = 0
+        
+        # Use scientifically optimized angles for diagonal search
+        for ax in angle_list:
+            for ay in angle_list:
+                for az in angle_list:
+                    diagonal_candidates_checked += 1
+                    
+                    try:
+                        # Extract diagonal slice
+                        diagonal_slice = extract_arbitrary_slice_torch(volume_t, (ax, ay, az), center, out_shape)
+                        
+                        # Apply segmentation to diagonal slice if enabled
+                        if use_segmentation:
+                            diagonal_slice_segmented = segment_volume_slice(diagonal_slice, segmentation_threshold, preserve_holes)
+                            diagonal_slice_np = diagonal_slice_segmented.cpu().numpy()[0, 0]
+                        else:
+                            diagonal_slice_np = diagonal_slice.cpu().numpy()[0, 0]
+                        
+                        # Check fossil content
+                        diagonal_mask = create_binary_mask(diagonal_slice_np, 'otsu')
+                        fossil_ratio = np.sum(diagonal_mask) / diagonal_mask.size
+                        
+                        if fossil_ratio < fossil_area_threshold:
+                            continue
+                        
+                        valid_slices_found += 1
+                        
+                        # Compute Dice coefficient
+                        dice_val = dice_coefficient(query_mask, diagonal_mask)
+                        
+                        # Compute Hu moments distance
+                        diagonal_hu = compute_hu_moments(diagonal_slice_np)
+                        hu_dist = np.sum(np.abs(np.array(query_hu) - np.array(diagonal_hu)))
+                        hu_similarity = 1.0 / (1.0 + hu_dist)
+                        
+                        # Stage 1 coarse score (Dice + Hu Moments)
+                        coarse_score = 0.7 * dice_val + 0.3 * hu_similarity
+                        
+                        # Store diagonal candidate
+                        candidate = {
+                            "score": coarse_score,
+                            "axis": "diagonal",
+                            "angles": (ax, ay, az),
+                            "dice": dice_val,
+                            "hu_distance": hu_dist,
+                            "slice_2d": diagonal_slice_segmented if use_segmentation else diagonal_slice.clone(),
+                            "candidate_id": f"diagonal_{ax}_{ay}_{az}"
+                        }
+                        
+                        all_candidates.append(candidate)
+                        
+                    except Exception as e:
+                        # Skip problematic diagonal slices
+                        continue
+        
+        # st.write(f"  📐 Diagonal Search: Checked {diagonal_candidates_checked} angles, found {len([c for c in all_candidates if c.get('axis') == 'diagonal'])} valid diagonal candidates")
+    
+    # Sort all candidates by coarse score and select top N
+    all_candidates.sort(key=lambda x: x["score"], reverse=True)
+    top_candidates = all_candidates[:top_n_candidates]
+    
+    # st.write(f"  📊 Stage 1 Complete: Checked {total_slices_checked} slices, found {valid_slices_found} with fossil content")
+    # st.write(f"  🎯 Selected top {len(top_candidates)} candidates for Stage 2 fine-tuning:")
+    
+    # Comment out the candidate listing to reduce verbose output
+    # for i, candidate in enumerate(top_candidates, 1):
+    #     axis_name = ["axial", "coronal", "sagittal"][candidate["axis"]]
+    #     st.write(f"    {i}. {axis_name} slice {candidate['index']} (score: {candidate['score']:.4f})")
+    
+    if not top_candidates:
+        st.warning("⚠️ No valid candidates found in Stage 1")
+        return {
+            "mode": "multi_candidate_two_stage",
+            "stage1_candidates": [],
+            "stage2_results": [],
+            "final_score": 0,
+            "final_pose": None
+        }
+    
+    # Stage 2: Fine-Tuning for Each Top Candidate
+    if enable_rotation_testing:
+        # st.write(f"🎯 **Stage 2: Multi-Candidate Fine-Tuning** - Processing {len(top_candidates)} candidates with rotation testing (Dice + NCC + SSIM + ORB)")
+        pass
+    else:
+        # st.write(f"🎯 **Stage 2: Multi-Candidate Fine-Tuning** - Processing {len(top_candidates)} candidates (Dice + NCC + SSIM + ORB)")
+        pass
+    
+    stage2_results = []
+    
+    for i, candidate in enumerate(top_candidates, 1):
+        if candidate["axis"] == "diagonal":
+            # st.write(f"  🔧 Processing candidate {i}/{len(top_candidates)}: diagonal angles {candidate['angles']}")
+            
+            # For diagonal candidates, use the candidate slice directly with rotation testing
+            stage2_result = stage2_fine_tuning_diagonal_candidate(
+                volume_t, slice_t, candidate, 
+                use_segmentation, segmentation_threshold,
+                preserve_holes=preserve_holes,
+                w_dice_fine=w_dice_fine, w_ncc_fine=w_ncc_fine, w_ssim_fine=w_ssim_fine, w_orb_fine=w_orb_fine
+            )
+        else:
+            axis_name = ["axial", "coronal", "sagittal"][candidate["axis"]]
+            # st.write(f"  🔧 Processing candidate {i}/{len(top_candidates)}: {axis_name} slice {candidate['index']}")
+            
+            # Run Stage 2 fine-tuning on this candidate
+            if enable_rotation_testing:
+                stage2_result = stage2_fine_tuning_with_rotation(
+                    volume_t, slice_t, candidate, search_radius, 
+                    use_segmentation, segmentation_threshold,
+                    preserve_holes=preserve_holes,
+                    w_dice_fine=w_dice_fine, w_ncc_fine=w_ncc_fine, w_ssim_fine=w_ssim_fine, w_orb_fine=w_orb_fine
+                )
+            else:
+                stage2_result = stage2_fine_tuning(
+                    volume_t, slice_t, candidate, search_radius, 
+                    use_segmentation, segmentation_threshold,
+                    preserve_holes=preserve_holes
+                )
+        
+        # Add candidate information to the result
+        stage2_result["stage1_score"] = candidate["score"]
+        stage2_result["candidate_id"] = candidate["candidate_id"]
+        stage2_result["stage1_rank"] = i
+        
+        stage2_results.append(stage2_result)
+        
+        if stage2_result["score"] > 0:
+            improvement = stage2_result["score"] - candidate["score"]
+            # st.write(f"    ✅ Stage 2 score: {stage2_result['score']:.4f} (improvement: {improvement:+.4f})")
+        else:
+            # st.write(f"    ❌ Stage 2 failed for this candidate")
+            pass
+    
+    # Find the best result after Stage 2
+    valid_stage2_results = [r for r in stage2_results if r["score"] > 0]
+    
+    if not valid_stage2_results:
+        st.warning("⚠️ All Stage 2 fine-tuning attempts failed - using best Stage 1 result")
+        best_candidate = top_candidates[0]
+        return {
+            "mode": "multi_candidate_two_stage",
+            "stage1_candidates": top_candidates,
+            "stage2_results": stage2_results,
+            "final_score": best_candidate["score"],
+            "final_pose": {"axis": best_candidate["axis"], "index": best_candidate["index"]},
+            "score": best_candidate["score"],
+            "axis": best_candidate["axis"],
+            "index": best_candidate["index"],
+            "slice_2d": best_candidate.get("slice_2d"),
+            "dice": best_candidate.get("dice", 0),
+            "ncc": 0,
+            "ssim": 0,
+            "orb": 0,  # Add ORB score (0 for Stage 1 fallback)
+            "orb_matches": 0,  # Add ORB matches count
+            "best_rotation": 0,
+            "winning_candidate": 1  # First candidate from Stage 1
+        }
+    
+    # Sort Stage 2 results by final score
+    valid_stage2_results.sort(key=lambda x: x["score"], reverse=True)
+    final_winner = valid_stage2_results[0]
+    
+    # Enhanced success message with multi-candidate analysis
+    rotation_info = ""
+    if enable_rotation_testing and final_winner.get('best_rotation', 0) != 0:
+        rotation_info = f" (rotated {final_winner['best_rotation']}°)"
+    
+    winning_rank = final_winner["stage1_rank"]
+    axis_name = ["axial", "coronal", "sagittal"][final_winner["axis"]]
+    
+    # Comment out verbose winner announcement for cleaner UI
+    # st.success(f"🏆 **Multi-Candidate Winner**: Candidate #{winning_rank} ({axis_name} slice {final_winner['index']})")
+    # st.success(f"    📈 Final score: {final_winner['score']:.4f}{rotation_info}")
+    # st.success(f"    📊 Stage 1→2 improvement: {final_winner['score'] - final_winner['stage1_score']:+.4f}")
+    
+    # Show ranking changes (commented out to reduce verbose output)
+    # st.write("📋 **Candidate Performance Summary:**")
+    # for i, result in enumerate(valid_stage2_results, 1):
+    #     stage1_rank = result["stage1_rank"]
+    #     rank_change = stage1_rank - i  # Positive = moved up, negative = moved down
+    #     rank_symbol = "⬆️" if rank_change > 0 else "⬇️" if rank_change < 0 else "➡️"
+    #     stage2_rank_text = f"#{i}" if i <= 3 else f"#{i}"
+    #     
+    #     st.write(f"  {stage2_rank_text} {result['candidate_id']} - Stage 2: {result['score']:.4f} "
+    #             f"(was #{stage1_rank} in Stage 1) {rank_symbol}")
+    
+    # Compile complete result
+    complete_result = {
+        "mode": "multi_candidate_rotation_invariant" if enable_rotation_testing else "multi_candidate_two_stage",
+        "stage1_candidates": top_candidates,
+        "stage2_results": stage2_results,
+        "final_score": final_winner["score"],
+        "final_pose": final_winner["final_pose"],
+        # For compatibility with existing display code
+        "score": final_winner["score"],
+        "axis": final_winner["axis"],
+        "index": final_winner["index"],
+        "slice_2d": final_winner.get("slice_2d"),
+        "dice": final_winner.get("dice", 0),
+        "ncc": final_winner.get("ncc", 0),
+        "ssim": final_winner.get("ssim", 0),
+        "orb": final_winner.get("orb", 0),  # Add ORB score
+        "orb_matches": final_winner.get("orb_matches", 0),  # Add ORB matches count
+        "best_rotation": final_winner.get("best_rotation", 0),
+        "rotation_tested": enable_rotation_testing,
+        "winning_candidate": winning_rank,
+        "total_candidates_processed": len(top_candidates),
+        "candidates_ranking_change": sum(1 for i, r in enumerate(valid_stage2_results) if r["stage1_rank"] != (i + 1))
+    }
+    
+    return complete_result
+
+
+def two_stage_coarse_to_fine_matching(volume_t, slice_t, axes=[0,1,2], fossil_area_threshold=0.05, 
+                                     search_radius=5, use_segmentation=False, segmentation_threshold=0.5,
+                                     enable_rotation_testing=True, preserve_holes=True):
+    """
+    Complete two-stage coarse-to-fine matching pipeline with rotation invariance.
+    
+    IMPROVED: Now includes rotation testing in Stage 2 for rotation-invariant matching.
+    
+    Args:
+        volume_t: 4D torch tensor (1,1,D,H,W) - the 3D volume
+        slice_t: 4D torch tensor (1,1,H,W) - the query slice
+        axes: List of axes to search
+        fossil_area_threshold: Minimum fossil content for valid slices
+        search_radius: Fine-tuning search radius around coarse result
+        use_segmentation: Whether to apply advanced segmentation consistently
+        segmentation_threshold: Threshold for segmentation (if enabled)
+        enable_rotation_testing: Whether to test rotations in Stage 2 (NEW)
+    
+    Returns:
+        final_result: Dict containing complete matching results
+    """
+    # Stage 1: Coarse Search (now with improved Hu moment weighting)
+    if use_segmentation:
+        # st.write("🔍 **Stage 1: Coarse Search** (Dice + Hu Moments) with segmentation and improved rotation invariance")
+        pass
+    else:
+        # st.write("🔍 **Stage 1: Coarse Search** (Dice + Hu Moments) with improved rotation invariance")
+        pass
+    
+    initial_pose = stage1_coarse_search(volume_t, slice_t, axes, fossil_area_threshold, 
+                                       use_segmentation, segmentation_threshold)
+    
+    if initial_pose["score"] <= 0:
+        st.warning("⚠️ Stage 1 failed - no valid initial pose found")
+        return {
+            "mode": "two_stage",
+            "stage1_result": initial_pose,
+            "stage2_result": None,
+            "final_score": 0,
+            "final_pose": None
+        }
+    
+    st.success(f"✅ Stage 1 Complete: axis={initial_pose['axis']}, index={initial_pose['index']}, score={initial_pose['score']:.4f}")
+    
+    # Stage 2: Fine-Tuning with optional rotation testing
+    if enable_rotation_testing:
+        if use_segmentation:
+            # st.write("🎯 **Stage 2: Fine-Tuning** (Dice + NCC + SSIM + ORB) with segmentation and rotation testing")
+            pass
+        else:
+            # st.write("🎯 **Stage 2: Fine-Tuning** (Dice + NCC + SSIM + ORB) with rotation testing")
+            pass
+        
+        # Use the new rotation-aware fine-tuning function
+        final_result = stage2_fine_tuning_with_rotation(
+            volume_t, slice_t, initial_pose, search_radius, 
+            use_segmentation, segmentation_threshold,
+            preserve_holes=preserve_holes,
+            w_dice_fine=w_dice_fine, w_ncc_fine=w_ncc_fine, w_ssim_fine=w_ssim_fine, w_orb_fine=w_orb_fine
+        )
+    else:
+        if use_segmentation:
+            # st.write("🎯 **Stage 2: Fine-Tuning** (Dice + NCC + SSIM + ORB) with segmentation")
+            pass
+        else:
+            # st.write("🎯 **Stage 2: Fine-Tuning** (Dice + NCC + SSIM + ORB) without rotation testing")
+            pass
+        
+        # Use the original fine-tuning function
+        final_result = stage2_fine_tuning(
+            volume_t, slice_t, initial_pose, search_radius, 
+            use_segmentation, segmentation_threshold,
+            preserve_holes=preserve_holes
+        )
+    
+    if final_result["score"] <= 0:
+        st.warning("⚠️ Stage 2 failed - using Stage 1 result")
+        # Use Stage 1 result as fallback
+        return {
+            "mode": "two_stage", 
+            "stage1_result": initial_pose,
+            "stage2_result": None,
+            "final_score": initial_pose["score"],
+            "final_pose": {"axis": initial_pose["axis"], "index": initial_pose["index"]},
+            "score": initial_pose["score"],
+            "axis": initial_pose["axis"],
+            "index": initial_pose["index"],
+            "slice_2d": initial_pose.get("slice_2d"),
+            "dice": initial_pose.get("dice", 0),
+            "ncc": 0,
+            "ssim": 0,  # Stage 2 failed, so no SSIM computed
+            "orb": 0,  # Add ORB score (0 for Stage 1 fallback)
+            "orb_matches": 0,  # Add ORB matches count
+            "best_rotation": 0
+        }
+    
+    # Enhanced success message with rotation information
+    rotation_info = ""
+    if enable_rotation_testing and 'best_rotation' in final_result and final_result['best_rotation'] != 0:
+        rotation_info = f" (rotated {final_result['best_rotation']}°)"
+    
+    st.success(f"✅ Stage 2 Complete: axis={final_result['axis']}, index={final_result['index']}, score={final_result['score']:.4f}{rotation_info}")
+    
+    # Combine results
+    complete_result = {
+        "mode": "two_stage_rotation_invariant" if enable_rotation_testing else "two_stage",
+        "stage1_result": initial_pose,
+        "stage2_result": final_result,
+        "final_score": final_result["score"],
+        "final_pose": final_result["final_pose"],
+        # For compatibility with existing display code
+        "score": final_result["score"],
+        "axis": final_result["axis"],
+        "index": final_result["index"],
+        "slice_2d": final_result.get("slice_2d"),
+        "dice": final_result.get("dice", 0),
+        "ncc": final_result.get("ncc", 0),
+        "ssim": final_result.get("ssim", 0),  # FIXED: Now using SSIM from Stage 2
+        "orb": final_result.get("orb", 0),  # Add ORB score
+        "orb_matches": final_result.get("orb_matches", 0),  # Add ORB matches count
+        "best_rotation": final_result.get("best_rotation", 0),  # NEW: rotation information
+        "rotation_tested": enable_rotation_testing  # NEW: flag indicating if rotation was tested
+    }
+    
+    return complete_result
 
 def extract_arbitrary_slice_torch(volume_t, angles, center, out_shape=(256,256)):
     D, H, W = volume_t.shape[2:]
@@ -1114,7 +2684,7 @@ def extract_arbitrary_slice_torch(volume_t, angles, center, out_shape=(256,256))
                          padding_mode='border', align_corners=True).squeeze(2)
 
 def search_orthogonal_torch(volume_t, slice_t, w_ssim, w_ncc, axes=[0,1,2], fossil_area_threshold=0.05, 
-                           use_segmentation=False, segmentation_threshold=0.5):
+                           use_segmentation=False, segmentation_threshold=0.5, preserve_holes=True):
     best = {"score": -1}
     D, H, W = volume_t.shape[2:]
     
@@ -1192,7 +2762,7 @@ def search_orthogonal_torch(volume_t, slice_t, w_ssim, w_ncc, axes=[0,1,2], foss
             
             # Apply segmentation to volume slice if enabled
             if use_segmentation:
-                sl = segment_volume_slice(sl, segmentation_threshold)
+                sl = segment_volume_slice(sl, segmentation_threshold, preserve_holes)
             
             ssim_v = ssim_torch(slice_t, sl)
             ncc_v = ncc_torch(slice_t, sl)
@@ -1255,26 +2825,32 @@ def search_diagonal_coarse_to_fine_torch(volume_t, slice_t, w_ssim, w_ncc, coars
 def match_slice_to_volume_torch(volume_t, slice_t, w_ssim=0.5, w_ncc=0.5, axes=[0,1,2],
                                 enable_diagonal=False, angle_step=30, use_all_degrees=False,
                                 coarse_to_fine=False, angle_list=None, fossil_area_threshold=0.05,
-                                use_segmentation=False, segmentation_threshold=0.5):
+                                use_segmentation=False, segmentation_threshold=0.5, 
+                                use_two_stage=False, enable_rotation_testing=True, preserve_holes=True,
+                                use_multi_candidate=False, top_n_candidates=5,
+                                w_dice_fine=0.3, w_ncc_fine=0.25, w_ssim_fine=0.25, w_orb_fine=0.2):
+    """
+    Enhanced matching function with multiple pipeline options.
     
-    # Search orthogonal slices (with segmentation if enabled)
-    best_ortho = search_orthogonal_torch(volume_t, slice_t, w_ssim, w_ncc, axes, fossil_area_threshold,
-                                        use_segmentation, segmentation_threshold)
-    best = dict(mode="orthogonal", **best_ortho, angles=None, rotation_angle=None, rotation_axis=None)
+    Args:
+        use_two_stage: If True, uses the two-stage pipeline (Dice+Hu -> Dice+NCC)
+                      If False, uses the original single-stage pipeline (SSIM+NCC)
+        use_multi_candidate: If True, uses the NEW multi-candidate approach
+        enable_rotation_testing: Always True (rotation testing always enabled)
+        top_n_candidates: Number of candidates to process in multi-candidate mode
+    """
     
-    # Search diagonal slices (optional)
-    if enable_diagonal:
-        diag = search_diagonal_coarse_to_fine_torch(volume_t, slice_t, w_ssim, w_ncc,
-                                                    coarse_step=angle_step,
-                                                    angle_list=angle_list) \
-               if coarse_to_fine else \
-               search_diagonal_brute_force_torch(volume_t, slice_t, w_ssim, w_ncc,
-                                                 angle_step, use_all_degrees,
-                                                 angle_list)
-        if diag["score"] > best["score"]:
-            best = dict(mode="diagonal", **diag, axis=None, index=None, rotation_angle=None, rotation_axis=None)
+    # Only Multi-Candidate Two-Stage Pipeline with Rotation Invariance is available
+    # Other pipelines (two-stage and single-stage) have been removed
     
-    return best
+    return multi_candidate_fine_tuning(
+        volume_t, slice_t, axes, fossil_area_threshold, search_radius=5,
+        use_segmentation=use_segmentation, segmentation_threshold=segmentation_threshold,
+        enable_rotation_testing=enable_rotation_testing, preserve_holes=preserve_holes,
+        top_n_candidates=top_n_candidates,
+        w_dice_fine=w_dice_fine, w_ncc_fine=w_ncc_fine, w_ssim_fine=w_ssim_fine, w_orb_fine=w_orb_fine,
+        enable_diagonal=enable_diagonal, angle_list=angle_list
+    )
 
 def get_orientation_name(axis):
     """Convert axis number to orientation name"""
@@ -1402,7 +2978,7 @@ def slice_has_fossil(mask_slice, min_area_ratio=0.05):
     total_pixels = mask_slice.size
     return (fossil_pixels / total_pixels) >= min_area_ratio
 
-def segment_volume_slice(slice_tensor, threshold=0.5):
+def segment_volume_slice(slice_tensor, threshold=0.5, preserve_holes=True):
     """Apply segmentation to a volume slice for fair comparison"""
     # Convert tensor to numpy for segmentation
     if hasattr(slice_tensor, 'cpu'):
@@ -1414,7 +2990,7 @@ def segment_volume_slice(slice_tensor, threshold=0.5):
     
     # Apply the full fossil segmentation (same as input image)
     try:
-        segmented_np = apply_fossil_segmentation(slice_np, threshold, show_preview=False)
+        segmented_np = apply_fossil_segmentation(slice_np, threshold, show_preview=False, preserve_holes=preserve_holes)
         
         # Convert back to tensor
         if device is not None:
@@ -1443,39 +3019,6 @@ def create_gaussian_window(window_size=11, sigma=1.5, channels=1):
     gauss /= gauss.sum()
     gauss2d = (gauss.unsqueeze(0) * gauss.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
     return gauss2d.expand(channels, 1, window_size, window_size)
-
-def ssim_torch(img1, img2, window_size: int = 11, data_range: float = 1.0):
-    """Structural SIMilarity for two single‑channel images"""
-    if not torch.is_tensor(img1):
-        img1 = torch.from_numpy(img1).float()
-    if not torch.is_tensor(img2):
-        img2 = torch.from_numpy(img2).float()
-
-    if img1.dim() == 2: img1 = img1[None, None]
-    if img2.dim() == 2: img2 = img2[None, None]
-    img1, img2 = img1.to(img2.dtype), img2
-
-    img1 = (img1 - img1.min()) / (img1.max() - img1.min() + 1e-8) * data_range
-    img2 = (img2 - img2.min()) / (img2.max() - img2.min() + 1e-8) * data_range
-
-    window = create_gaussian_window(window_size, sigma=1.5).to(img1.device)
-
-    C1 = (0.01 * data_range) ** 2
-    C2 = (0.03 * data_range) ** 2
-    pad = window_size // 2
-
-    mu1 = F.conv2d(img1, weight=window, bias=None, stride=1, padding=pad, groups=1)
-    mu2 = F.conv2d(img2, weight=window, bias=None, stride=1, padding=pad, groups=1)
-
-    mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1*mu2
-    sigma1_sq = F.conv2d(img1*img1, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu1_sq
-    sigma2_sq = F.conv2d(img2*img2, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu2_sq
-    sigma12   = F.conv2d(img1*img2, weight=window, bias=None, stride=1, padding=pad, groups=1) - mu1_mu2
-
-    num = (2*mu1_mu2 + C1) * (2*sigma12 + C2)
-    den = (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
-    ssim_map = num / den
-    return ssim_map.mean().clamp(-1, 1).item()
 
 def ncc_torch(img1, img2):
     f1, f2   = img1.view(-1), img2.view(-1)
@@ -1524,6 +3067,95 @@ with st.sidebar:
             </h4>
         </div>
     """, unsafe_allow_html=True)
+    
+    # Add spacing between Search Configuration and Pipeline Selection
+    st.markdown("<div style='margin: 1.5rem 0;'></div>", unsafe_allow_html=True)
+    
+    # NEW: Pipeline Selection
+    st.markdown("""
+        <div style="margin-bottom: 1rem;">
+            <h5 style="margin: 0 0 0.5rem 0; color: #c7d2fe; font-weight: 500;">
+                <span class="icon">⚙️</span>Matching Pipeline
+            </h5>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Only Multi-Candidate Fine-Tuning pipeline is available
+    pipeline_mode = "Multi-Candidate Fine-Tuning"
+    
+    # Always use multi-candidate approach - other pipelines removed
+    use_two_stage = False
+    use_multi_candidate = True
+    
+    # Multi-Candidate Pipeline is now the only option
+    st.markdown("""
+        <div style="padding: 0.75rem; background: rgba(139, 69, 19, 0.1); border: 1px solid rgba(139, 69, 19, 0.3); border-radius: 8px; margin-top: 0.5rem;">
+            <h5 style="margin: 0 0 0.5rem 0; color: #d2691e;">🏆 Multi-Candidate Pipeline</h5>
+            <small style="color: #daa520;">
+                <strong>Strategy:</strong> Processes multiple promising candidates<br>
+                <strong>Stage 1:</strong> Finds top N candidates (Dice + Hu Moments)<br>
+                <strong>Stage 2:</strong> Fine-tunes each candidate (Dice + NCC + SSIM + ORB)<br>
+                <strong>Winner:</strong> Best performer after Stage 2 processing<br>
+                <strong>Benefit:</strong> Prevents early dismissal of good matches
+            </small>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Rotation invariance option for multi-candidate pipeline (always enabled)
+    st.markdown("<div style='margin: 1rem 0;'></div>", unsafe_allow_html=True)
+    
+    # Always enable rotation testing - no user option needed
+    enable_rotation_testing = True
+    
+    # # Always show the rotation testing info since it's always enabled
+    # st.markdown(f"""
+    #     <div style="padding: 0.75rem; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 8px; margin-top: 0.5rem;">
+    #         <h5 style="margin: 0 0 0.5rem 0; color: #f59e0b;">🎯 Multi-Candidate + Rotation Testing (Always Active)</h5>
+    #         <small style="color: #fbbf24;">
+    #             <strong>Power Mode:</strong> Tests {top_n_candidates} candidates × 12 rotations<br>
+    #             <strong>Total Tests:</strong> Up to {top_n_candidates * 12} fine-tuning operations<br>
+    #             <strong>Quality:</strong> Maximum possible accuracy<br>
+    #             <strong>Time:</strong> Most thorough but slower processing
+    #         </small>
+    #     </div>
+    # """, unsafe_allow_html=True)
+    
+    # # Add comparison information with new pipeline
+    # with st.expander("📊 Pipeline Comparison", expanded=False):
+    #     st.markdown("### 🆚 Pipeline Comparison Overview")
+        
+    #     col1, col2, col3 = st.columns(3)
+        
+    #     with col1:
+    #         st.markdown("#### 🔧 Single-Stage")
+    #         st.write("**Metrics:** SSIM + NCC")
+    #         st.write("**Search:** Direct similarity")
+    #         st.write("**Speed:** Fastest")
+    #         st.write("**Best for:** Clean fossils")
+        
+    #     with col2:
+    #         st.markdown("#### 🚀 Two-Stage")
+    #         st.write("**Stage 1:** Dice + Hu Moments")
+    #         st.write("**Stage 2:** Dice + NCC + SSIM")
+    #         st.write("**Speed:** Moderate")
+    #         st.write("**Best for:** Complex fossils")
+        
+    #     with col3:
+    #         st.markdown("#### 🏆 Multi-Candidate")
+    #         st.write("**Innovation:** Process top N candidates")
+    #         st.write("**Method:** Best of multiple fine-tunings")
+    #         st.write("**Speed:** Thorough but slower")
+    #         st.write("**Best for:** Maximum accuracy")
+        
+    #     st.markdown("---")
+    #     st.markdown("### 🎯 When to Use Each Pipeline")
+        
+    #     st.markdown("**🔧 Single-Stage:** Use when you have high-quality, clean fossil images and need fast results.")
+    #     st.markdown("**🚀 Two-Stage:** Use for most fossil identification tasks. Good balance of accuracy and speed.")
+    #     st.markdown("**🏆 Multi-Candidate:** Use when accuracy is paramount and you want to ensure no good matches are missed.")
+        
+    #     st.info("💡 **Recommendation:** Start with Multi-Candidate for best results, fall back to Two-Stage if processing time is a concern.")
+    
     
     # Add spacing between Search Configuration and Orthogonal Search Axes
     st.markdown("<div style='margin: 1.5rem 0;'></div>", unsafe_allow_html=True)
@@ -2015,7 +3647,161 @@ with tab1:
             </div>
         """, unsafe_allow_html=True)
         
+        with st.expander("🧠 Multi-Candidate Pipeline Technology", expanded=False):
+            st.markdown("### 🏆 Multi-Candidate Fine-Tuning Algorithm")
+            
+            st.markdown("#### 🚀 Revolutionary Approach: Process Multiple Promising Candidates")
+            st.success("**Key Innovation:** Instead of settling on the first 'best' match from Stage 1, we process multiple promising candidates through Stage 2.")
+            
+            st.markdown("#### 📋 Conceptual Change vs Traditional Two-Stage:")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**🔧 Traditional Two-Stage:**")
+                st.info("1. Stage 1 finds 1 best candidate\n2. Stage 2 fine-tunes that candidate\n3. Result is returned")
+                st.warning("**Problem:** Good candidates might be dismissed if Stage 1 scoring isn't perfect")
+                
+            with col2:
+                st.markdown("**🏆 Multi-Candidate Approach:**")
+                st.success("1. Stage 1 finds TOP N candidates (e.g., top 5)\n2. Stage 2 fine-tunes ALL candidates\n3. Winner = highest Stage 2 score")
+                st.success("**Benefit:** Ensures promising matches aren't lost due to Stage 1 limitations")
+            
+            st.markdown("#### ⚙️ Implementation Details")
+            
+            st.markdown("##### 🔍 Stage 1: Multi-Candidate Coarse Search")
+            st.write("**Goal:** Cast a wide net to find ALL potentially good matches")
+            st.write("- **Process:** Search ALL valid slices across ALL axes")
+            st.write("- **Scoring:** Dice Score + Hu Moments for each slice")
+            st.write("- **Selection:** Sort by score and keep top N candidates")
+            st.write("- **Output:** List of N candidates with their initial scores")
+            
+            st.markdown("##### 🎯 Stage 2: Multi-Candidate Fine-Tuning")
+            st.write("**Goal:** Apply sophisticated analysis to each candidate")
+            st.write("- **Process:** Run full fine-tuning on each of the N candidates")
+            st.write("- **Metrics:** Dice + NCC + SSIM for detailed evaluation")
+            st.write("- **Rotation:** Optional rotation testing for each candidate")
+            st.write("- **Winner Selection:** Candidate with highest Stage 2 score wins")
+            
+            st.markdown("#### 🎯 Key Advantages")
+            st.success("✅ **Prevents Early Dismissal:** Good matches aren't lost in Stage 1")
+            st.success("✅ **Ranking Improvements:** Lower-ranked Stage 1 candidates can win in Stage 2")
+            st.success("✅ **Higher Accuracy:** More thorough evaluation of all possibilities")
+            st.success("✅ **Rotation Invariant:** Each candidate tested with multiple rotations")
+            st.success("✅ **Robust Results:** Less sensitive to Stage 1 scoring limitations")
+            
+            st.markdown("#### 📊 Performance Analysis")
+            st.write("**Computational Cost:** N times more processing than traditional two-stage")
+            st.write("**Quality Benefit:** Significantly improved match accuracy")
+            st.write("**Best Use Case:** When accuracy is more important than speed")
+            st.write("**Typical Settings:** N=3-7 candidates, with rotation testing enabled")
+            
+            st.markdown("#### 🔬 Real-World Impact")
+            st.info("**Scenario:** A fossil might appear in Stage 1 as candidate #3 due to lighting/preservation differences, but when Stage 2 applies rotation and detailed metrics, it becomes the clear winner.")
+            
+            st.markdown("#### ⚡ Processing Workflow Example")
+            st.code("""
+1. Stage 1 examines 500+ slices, finds scores:
+   - Candidate #1: Axial slice 45 (score: 0.85)
+   - Candidate #2: Coronal slice 12 (score: 0.83)  
+   - Candidate #3: Sagittal slice 67 (score: 0.82)
+   - Candidate #4: Axial slice 23 (score: 0.81)
+   - Candidate #5: Coronal slice 34 (score: 0.80)
+
+2. Stage 2 fine-tunes each candidate:
+   - Candidate #1: Final score 0.87 (no rotation)
+   - Candidate #2: Final score 0.91 (rotation 90°)  ← WINNER!
+   - Candidate #3: Final score 0.84 (rotation 30°)
+   - Candidate #4: Final score 0.86 (no rotation)
+   - Candidate #5: Final score 0.83 (rotation 180°)
+
+3. Result: Candidate #2 wins despite being #2 in Stage 1!
+            """, language=None)
+            
+        with st.expander("🧠 Two-Stage Pipeline Technology", expanded=False):
+            st.markdown("### 🚀 Two-Stage Coarse-to-Fine Search Algorithm")
+            
+            st.markdown("#### 🔍 Stage 1: Coarse Search for Initial Pose Estimation")
+            st.info("**Goal:** Quickly find the best approximate location of the query slice within a 3D volume")
+            st.write("**Metric:** Combines Dice Score + Hu Moments")
+            st.write("- **Dice Score:** Measures overlap between binary masks (higher = better)")
+            st.write("- **Hu Moments:** Shape descriptors for morphological similarity (distance converted to similarity)")
+            st.write("- **IMPROVED:** Hu Moments weight increased from 0.3 to 0.6 for better rotation invariance")
+            st.write("- **Combined Score:** `w_dice × dice + w_hu × hu_similarity` (now 0.4 + 0.6)")
+            st.write("- **Output:** Initial pose (axis, index) with best coarse score")
+            
+            st.markdown("#### 🎯 Stage 2: Fine-Tuning with 2D-to-3D Registration")
+            st.info("**Goal:** Find precise, sub-slice alignment around the coarse result")
+            st.write("**Metric:** Combines Dice Score + NCC + SSIM + ORB Feature Matching")
+            st.write("- **Dice Score:** Binary mask overlap for structural alignment")
+            st.write("- **SSIM:** Structural similarity for detailed morphological comparison")
+            st.write("- **NCC:** Grayscale intensity correlation for texture matching")
+            st.write("- **ORB Features:** Rotation-invariant keypoint matching for structural analysis")
+            st.write("- **Search:** Local optimization around Stage 1 result")
+            st.write("- **NEW:** Optional rotation testing for in-plane rotation invariance")
+            st.write("- **Output:** Final pose and optimized similarity score")
+            
+            st.markdown("#### 🔄 NEW: Rotation Invariance Technology")
+            st.success("**Innovation:** In-Plane Rotation Testing in Stage 2")
+            st.write("**Method:**")
+            st.write("1. For each candidate slice from the 3D volume")
+            st.write("2. Test rotations: [0°, 30°, 60°, 90°, 120°, 150°, 180°, 210°, 240°, 270°, 300°, 330°]")
+            st.write("3. Calculate fine-tuning score for each rotation")
+            st.write("4. Use the maximum score from all rotations as the final score")
+            st.write("5. Store the best rotation angle for each slice")
+            
+            st.markdown("#### 🔑 NEW: ORB Feature Matching Technology")
+            st.success("**Innovation:** Oriented FAST and Rotated BRIEF (ORB) for structural analysis")
+            st.write("**Benefits:**")
+            st.write("- **Patent-Free:** Fast, effective, and royalty-free feature detection")
+            st.write("- **Rotation Invariant:** Built-in orientation compensation")
+            st.write("- **Scale Robust:** Multi-level pyramid feature detection")
+            st.write("- **Structural Focus:** Detects corners and edges critical for fossil identification")
+            st.write("**Implementation:**")
+            st.write("- FAST keypoint detector with Harris corner response")
+            st.write("- Oriented BRIEF descriptors for rotation invariance")
+            st.write("- Brute-force matching with Lowe's ratio test")
+            st.write("- Normalized scoring based on match quality and quantity")
+            
+            st.markdown("#### ⚡ Key Advantages")
+            st.success("✅ **Improved Accuracy:** Two-stage approach reduces false positives")
+            st.success("✅ **Enhanced Robustness:** Four complementary similarity measures")
+            st.success("✅ **Better Shape Matching:** Hu moments capture morphological features")
+            st.success("✅ **Feature-Based Analysis:** ORB detects structural keypoints")
+            st.success("✅ **Rotation Invariance:** Finds matches regardless of fossil orientation")
+            st.success("✅ **Consistent Segmentation:** Same processing applied to query and volume slices")
+            st.success("✅ **Efficient Search:** Coarse-to-fine reduces computational complexity")
+            
+            st.markdown("#### 🔬 Technical Implementation")
+            st.write("1. **Binary Mask Creation:** Otsu thresholding for fossil segmentation")
+            st.write("2. **Shape Analysis:** 7 Hu moment invariants for rotation/scale independence")
+            st.write("3. **Local Refinement:** ±5 slice search radius around coarse result")
+            st.write("4. **ORB Feature Detection:** Up to 500 keypoints per image with Harris scoring")
+            st.write("5. **Rotation Testing:** 12 angles tested per slice using PyTorch affine transformations")
+            st.write("6. **Score Fusion:** Weighted combination (Dice: 30%, NCC: 25%, SSIM: 25%, ORB: 20%)")
+            
+            st.markdown("#### 📊 Performance Impact")
+            st.warning("**Computational Cost:** Rotation testing increases processing time by ~12x per slice")
+            st.warning("**Memory Usage:** Multiple rotated images stored temporarily")
+            st.info("**Quality Benefit:** Dramatically improved accuracy for rotated fossil specimens")
+            st.info("**Practical Impact:** Handles real-world scanning variations and mounting orientations")
+        
         with st.expander("🧠 Deep Learning Segmentation Technology", expanded=False):
+            st.markdown("### 🎯 Pure Fossil-to-Fossil Matching")
+            st.success("✨ **Advanced AI Pipeline:** Multi-algorithm consensus approach")
+            st.success("🔬 **Technology Stack:** Otsu + Adaptive + Percentile + Histogram analysis")
+            st.success("🎯 **Result:** Pure fossil structures without interference")
+            
+            st.markdown("### ⚡ Performance Benefits")
+            st.warning("🚫 **Eliminates:** Background noise, lighting variations, substrate differences")
+            st.warning("🔍 **Focuses on:** Fossil morphology, structure, and diagnostic features")
+            st.warning("📈 **Accuracy:** Dramatically improves species identification precision")
+            
+            st.markdown("### 🎚️ How It Works")
+            st.info("1️⃣ **Input Analysis:** Applies identical segmentation to your image")
+            st.info("2️⃣ **Volume Processing:** Segments all 3D model slices using same algorithms")
+            st.info("3️⃣ **Fair Comparison:** Compares pure fossil content vs pure fossil content")
+            st.info("4️⃣ **Enhanced Accuracy:** Ignores mounting, lighting, and preservation differences")
             st.markdown("### 🎯 Pure Fossil-to-Fossil Matching")
             st.success("✨ **Advanced AI Pipeline:** Multi-algorithm consensus approach")
             st.success("🔬 **Technology Stack:** Otsu + Adaptive + Percentile + Histogram analysis")
@@ -2047,9 +3833,13 @@ with tab1:
         
         segmentation_threshold = 0.5
         show_segmentation = False
+        preserve_holes = True  # Default to preserving internal structure
         if enable_segmentation:
             segmentation_threshold = st.slider("Segmentation Sensitivity", 0.1, 0.9, 0.5, 0.05,
                                              help="Higher = more selective (only brightest fossil parts). Lower = includes more fossil details.")
+            
+            preserve_holes = st.checkbox("🏛️ Preserve Internal Structure", value=True,
+                                       help="Maintain chambers, pores, and internal holes instead of filling them")
             
             # Add helpful guidance
             if segmentation_threshold < 0.3:
@@ -2058,6 +3848,12 @@ with tab1:
                 st.info("🎯 **High sensitivity:** Very selective - only brightest fossil structures")
             else:
                 st.info("⚖️ **Balanced sensitivity:** Good compromise between detail and background removal")
+            
+            # Structure preservation guidance
+            if preserve_holes:
+                st.success("🏛️ **Structure Preservation ON:** Internal chambers, pores, and diagnostic holes will be preserved")
+            else:
+                st.warning("🔄 **Aggressive Mode:** Internal holes will be filled - may reduce species specificity")
         
         # Enhanced preprocessing for cropped fossils
         if enable_segmentation:
@@ -2065,7 +3861,8 @@ with tab1:
             st.write("🎯 **Applying Enhanced Fossil Segmentation...**")
             
             # Get the segmented result and mask
-            segmented_slice, segmentation_mask = apply_fossil_segmentation(slice_np, segmentation_threshold, return_mask=True)
+            segmented_slice, segmentation_mask = apply_fossil_segmentation(slice_np, segmentation_threshold, 
+                                                                       return_mask=True, preserve_holes=preserve_holes)
             
             # Always show the three-image comparison for all processing modes
             st.markdown("### 📸 Segmentation Results")
@@ -2466,26 +4263,106 @@ with tab2:
 with tab3:
     st.markdown("### 🎯 Matching Process & Results")
     
-    # Similarity weights configuration
-    st.markdown("#### ⚖️ Similarity Weights")
-    col_w1, col_w2 = st.columns(2)
+    # Multi-Candidate Pipeline weights configuration
+    st.markdown("#### 🏆 Multi-Candidate Pipeline Weights")
+    st.markdown("""
+        <div style="padding: 0.5rem; background: rgba(139, 69, 19, 0.1); border: 1px solid rgba(139, 69, 19, 0.3); border-radius: 6px; margin-bottom: 1rem;">
+            <small style="color: #d2691e;">
+                <strong>Stage 2 Fine-Tuning Metrics:</strong> Configure the weights for the four-metric scoring system used in Stage 2 fine-tuning phase of the Multi-Candidate Pipeline.
+            </small>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    col_w1, col_w2, col_w3, col_w4 = st.columns(4)
     
     with col_w1:
-        w_ssim = st.slider("SSIM Weight", 0.0, 1.0, 0.5, 0.05,
-                          help="Weight for Structural Similarity Index (SSIM). Higher values prioritize structural similarity.")
+        w_dice_fine = st.slider("Dice Weight", 0.0, 1.0, 0.3, 0.05,
+                               help="Weight for Dice coefficient in Stage 2 fine-tuning. Measures overlap similarity.")
     
     with col_w2:
-        w_ncc = 1.0 - w_ssim
-        st.metric("NCC Weight", f"{w_ncc:.2f}", 
-                 help="Weight for Normalized Cross-Correlation (NCC). Automatically calculated as 1 - SSIM Weight.")
+        w_ncc_fine = st.slider("NCC Weight", 0.0, 1.0, 0.25, 0.05,
+                              help="Weight for Normalized Cross-Correlation in Stage 2. Measures intensity correlation.")
     
-    # Add explanation of the weights
-    if w_ssim > 0.7:
-        st.info("🏗️ **Structure-focused:** High SSIM weight emphasizes structural patterns and shapes")
-    elif w_ssim < 0.3:
-        st.info("📊 **Intensity-focused:** High NCC weight emphasizes intensity correlations")
-    else:
-        st.info("⚖️ **Balanced approach:** Equal weighting of structure (SSIM) and intensity (NCC)")
+    with col_w3:
+        w_ssim_fine = st.slider("SSIM Weight", 0.0, 1.0, 0.25, 0.05,
+                               help="Weight for Structural Similarity Index in Stage 2. Measures structural patterns.")
+    
+    with col_w4:
+        w_orb_fine = st.slider("ORB Weight", 0.0, 1.0, 0.2, 0.05,
+                              help="Weight for ORB feature matching in Stage 2. Measures keypoint similarity.")
+    
+    # Show total weight and normalization
+    total_weight = w_dice_fine + w_ncc_fine + w_ssim_fine + w_orb_fine
+    col_info1, col_info2 = st.columns(2)
+    
+    with col_info1:
+        st.metric("Total Weight", f"{total_weight:.2f}", 
+                 help="Sum of all weights. Will be automatically normalized to 1.0 during computation.")
+    
+    with col_info2:
+        if total_weight > 0:
+            st.metric("Auto-Normalized", "✓ Enabled", 
+                     help="Weights are automatically normalized so they sum to 1.0")
+        else:
+            st.warning("⚠️ Total weight cannot be zero")
+    
+    # Add explanation of the current weight distribution
+    if total_weight > 0:
+        dice_pct = (w_dice_fine / total_weight) * 100
+        ncc_pct = (w_ncc_fine / total_weight) * 100
+        ssim_pct = (w_ssim_fine / total_weight) * 100
+        orb_pct = (w_orb_fine / total_weight) * 100
+        
+        if dice_pct > 40:
+            st.info(f"� **Overlap-focused:** {dice_pct:.1f}% Dice weight emphasizes geometric overlap")
+        elif orb_pct > 30:
+            st.info(f"� **Feature-focused:** {orb_pct:.1f}% ORB weight emphasizes keypoint matching")
+        else:
+            st.info(f"⚖️ **Balanced approach:** Dice {dice_pct:.1f}%, NCC {ncc_pct:.1f}%, SSIM {ssim_pct:.1f}%, ORB {orb_pct:.1f}%")
+    
+    # Multi-candidate configuration
+    st.markdown("#### 🎯 Multi-Candidate Configuration")
+    col_c1, col_c2 = st.columns(2)
+    
+    with col_c1:
+        top_n_candidates = st.slider(
+            "🏆 Number of Candidates", 
+            min_value=3, max_value=10, value=5, step=1,
+            help="How many top candidates from Stage 1 should be processed in Stage 2"
+        )
+    
+    with col_c2:
+        st.metric("Rotation Testing", "Always Enabled", 
+                 help="12 rotations (0°-330°) tested per candidate for maximum accuracy")
+    
+    # Configuration change detection and auto-clear results
+    current_config = {
+        'w_dice_fine': w_dice_fine,
+        'w_ncc_fine': w_ncc_fine, 
+        'w_ssim_fine': w_ssim_fine,
+        'w_orb_fine': w_orb_fine,
+        'top_n_candidates': top_n_candidates,
+        'enable_diag': enable_diag,
+        'axes_options': axes_options,
+        'selected_models': len(selected_models) if selected_models else 0,
+        'segmentation_enabled': st.session_state.get('enable_segmentation', False)
+    }
+    
+    # Check if configuration has changed
+    if 'last_config' not in st.session_state:
+        st.session_state.last_config = current_config
+    elif st.session_state.last_config != current_config:
+        # Configuration changed - clear previous results
+        st.session_state.matching_results = []
+        st.session_state.best_match_info = None
+        st.session_state.last_config = current_config
+        st.session_state.config_changed = True  # Flag to show notification
+        st.rerun()  # Refresh to show cleared results
+    
+    # Show notification if results were cleared due to config change
+    if st.session_state.get('config_changed', False):
+        st.info("🔄 **Configuration changed** - Previous results cleared. Click 'Start Matching Process' to run with new settings.")
+        st.session_state.config_changed = False  # Reset flag
     
     st.markdown("---")
     
@@ -2507,13 +4384,30 @@ with tab3:
         # Get the actual segmentation setting from upload processing
         segmentation_enabled = st.session_state.get('enable_segmentation', False)
         
+        # Calculate normalized weights for display
+        total_weight = w_dice_fine + w_ncc_fine + w_ssim_fine + w_orb_fine
+        if total_weight > 0:
+            dice_norm = w_dice_fine / total_weight
+            ncc_norm = w_ncc_fine / total_weight
+            ssim_norm = w_ssim_fine / total_weight
+            orb_norm = w_orb_fine / total_weight
+        else:
+            dice_norm = ncc_norm = ssim_norm = orb_norm = 0.25
+        
         config_info = f"""
         **🔍 Search Axes:** {axes_options}  
+        **🚀 Pipeline:** Multi-Candidate Fine-Tuning
+        
         **🎯 Image Segmentation:** {'Enabled' if segmentation_enabled else 'Disabled'}  
-        **↗️ Diagonal Search:** {'Enabled' if enable_diag else 'Disabled'}  
-        **⚖️ SSIM Weight:** {w_ssim:.2f}  
-        **⚖️ NCC Weight:** {w_ncc:.2f}  
+        **🏆 Candidates:** Top {top_n_candidates} processed  
+        **🔄 Rotation:** Multi-Candidate + Rotation (Always Enabled)  
+        **⚖️ Stage 2 Weights:**  
+        └── Dice: {dice_norm:.2f} ({dice_norm*100:.1f}%)  
+        └── NCC: {ncc_norm:.2f} ({ncc_norm*100:.1f}%)  
+        └── SSIM: {ssim_norm:.2f} ({ssim_norm*100:.1f}%)  
+        └── ORB: {orb_norm:.2f} ({orb_norm*100:.1f}%)  
         **🗂️ Models:** {len(selected_models)} selected  
+        **↗️ Diagonal Search:** {'Enabled' if enable_diag else 'Disabled'} {''if enable_diag else ''}
         """
         st.markdown(config_info)
     
@@ -2611,19 +4505,29 @@ with tab3:
                     # Run actual matching using the restored functions
                     # Use the same segmentation setting as was applied to the input image
                     use_segmentation_for_matching = st.session_state.get('enable_segmentation', False)
+                    segmentation_threshold_for_matching = st.session_state.get('segmentation_threshold', 0.5)
+                    
+                    # Determine angle_list for diagonal search (use Preset Optimal mode)
+                    angle_list = ROTATION_ANGLES if enable_diag else None
                     
                     match_result = match_slice_to_volume_torch(
                         volume_t=vol_t,
                         slice_t=slice_t,
-                        w_ssim=w_ssim,
-                        w_ncc=w_ncc,
                         axes=axes_options,
                         enable_diagonal=enable_diag,
                         angle_step=30,
                         use_all_degrees=False,
                         coarse_to_fine=True,
+                        angle_list=angle_list,  # NEW: Use scientifically optimized angles for diagonal search
                         fossil_area_threshold=0.05,
-                        use_segmentation=use_segmentation_for_matching
+                        use_segmentation=use_segmentation_for_matching,
+                        segmentation_threshold=segmentation_threshold_for_matching,
+                        use_two_stage=use_two_stage,  # Use two-stage pipeline
+                        enable_rotation_testing=enable_rotation_testing,  # Enable rotation invariance
+                        preserve_holes=preserve_holes,  # Preserve internal structure
+                        use_multi_candidate=use_multi_candidate,  # NEW: Enable multi-candidate approach
+                        top_n_candidates=top_n_candidates,  # NEW: Number of candidates to process
+                        w_dice_fine=w_dice_fine, w_ncc_fine=w_ncc_fine, w_ssim_fine=w_ssim_fine, w_orb_fine=w_orb_fine  # NEW: Fine-tuning weights
                     )
                     
                     # Validate match result
@@ -2670,20 +4574,75 @@ with tab3:
         
         # Top results display
         st.markdown("#### 🏆 Top Matches")
+    
+    elif not st.session_state.get('matching_results', []) and st.session_state.get('matching_done', False):
+        st.markdown("---")
+        st.info("ℹ️ **No matching results available.** Click 'Start Matching Process' to begin analysis.")
+    
+    elif not st.session_state.get('matching_results', []):
+        st.markdown("---")
+        st.markdown("### 📋 Matching Results")
+        st.info("📝 **Ready to start matching.** Configure your settings above and click 'Start Matching Process' to begin.")
+    
+    # Show results if available
+    if st.session_state.matching_done and st.session_state.matching_results:
+        scores_sorted = sorted(st.session_state.matching_results, key=lambda x: x["score"], reverse=True)
         
         for i, result in enumerate(scores_sorted[:5]):
             rank_emoji = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i]
             species = result.get('species', get_species_from_filename(result['model']))
+
+            
+            # Format metrics based on pipeline type
+            pipeline_mode = result.get('mode', 'unknown')
+            
+            if pipeline_mode in ['multi_candidate_two_stage', 'multi_candidate_rotation_invariant']:
+                metrics_info = f"<p><strong>Final Score:</strong> {result['score']:.4f}</p>"
+                # Include ORB in metrics display if available (show even if 0)
+                orb_display = f" | <strong>ORB:</strong> {result.get('orb', 0):.4f}" if 'orb' in result else ""
+                metrics_info += f"<p><strong>Dice:</strong> {result.get('dice', 0):.4f} | <strong>NCC:</strong> {result.get('ncc', 0):.4f} | <strong>SSIM:</strong> {result.get('ssim', 0):.4f}{orb_display}</p>"
+                
+                # Show multi-candidate specific information
+                winning_candidate = result.get('winning_candidate', 'N/A')
+                total_candidates = result.get('total_candidates_processed', 'N/A')
+                metrics_info += f"<p><strong>Winner:</strong> Candidate #{winning_candidate} of {total_candidates}</p>"
+                
+                # Show rotation information if available
+                if result.get('best_rotation', 0) != 0:
+                    metrics_info += f"<p><strong>Rotation Applied:</strong> {result['best_rotation']}°</p>"
+                
+                if pipeline_mode == 'multi_candidate_rotation_invariant':
+                    metrics_info += f"<p><strong>Pipeline:</strong> Multi-Candidate + Rotation Invariant</p>"
+                else:
+                    metrics_info += f"<p><strong>Pipeline:</strong> Multi-Candidate Two-Stage</p>"
+            
+            elif pipeline_mode in ['two_stage', 'two_stage_rotation_invariant']:
+                metrics_info = f"<p><strong>Final Score:</strong> {result['score']:.4f}</p>"
+                # Include ORB in metrics display if available (show even if 0)
+                orb_display = f" | <strong>ORB:</strong> {result.get('orb', 0):.4f}" if 'orb' in result else ""
+                metrics_info += f"<p><strong>Dice:</strong> {result.get('dice', 0):.4f} | <strong>NCC:</strong> {result.get('ncc', 0):.4f} | <strong>SSIM:</strong> {result.get('ssim', 0):.4f}{orb_display}</p>"
+                
+                # Show rotation information if available
+                if result.get('best_rotation', 0) != 0:
+                    metrics_info += f"<p><strong>Rotation Applied:</strong> {result['best_rotation']}°</p>"
+                
+                if pipeline_mode == 'two_stage_rotation_invariant':
+                    metrics_info += f"<p><strong>Pipeline:</strong> Two-Stage + Rotation Invariant</p>"
+                else:
+                    metrics_info += f"<p><strong>Pipeline:</strong> Two-Stage Coarse-to-Fine</p>"
+            else:
+                metrics_info = f"<p><strong>Combined Score:</strong> {result['score']:.4f}</p>"
+                metrics_info += f"<p><strong>SSIM:</strong> {result.get('ssim', 0):.4f} | <strong>NCC:</strong> {result.get('ncc', 0):.4f}</p>"
+                metrics_info += f"<p><strong>Pipeline:</strong> Single-Stage</p>"
             
             st.markdown(f"""
                 <div class="match-result">
                     <h5>{rank_emoji} {species}</h5>
                     <p><strong>Model:</strong> {result['model']}</p>
-                    <p><strong>Combined Score:</strong> {result['score']:.4f}</p>
-                    <p><strong>SSIM:</strong> {result['ssim']:.4f} | <strong>NCC:</strong> {result['ncc']:.4f}</p>
+                    {metrics_info}
                     <p><strong>Mode:</strong> {result['mode']}</p>
-                    {f"<p><strong>Axis:</strong> {result['axis']} | <strong>Index:</strong> {result['index']}</p>" if result['mode'] == 'orthogonal' else ""}
-                    {f"<p><strong>Angles:</strong> {result['angles']}</p>" if result['mode'] == 'diagonal' else ""}
+                    {f"<p><strong>Axis:</strong> {result['axis']} | <strong>Index:</strong> {result['index']}</p>" if result.get('axis') is not None else ""}
+                    {f"<p><strong>Angles:</strong> {result['angles']}</p>" if result.get('angles') else ""}
                 </div>
             """, unsafe_allow_html=True)
         
@@ -2736,16 +4695,28 @@ with tab3:
                 fossil_info = f" | Fossil Region: {fossil_size[0]}×{fossil_size[1]}×{fossil_size[2]} voxels"
             
             # Generate match details based on mode
-            if best_filtered["mode"] == "orthogonal":
+            pipeline_mode = best_filtered.get("mode", "unknown")
+            
+            if pipeline_mode in ['multi_candidate_two_stage', 'multi_candidate_rotation_invariant']:
+                winning_candidate = best_filtered.get('winning_candidate', 'N/A')
+                total_candidates = best_filtered.get('total_candidates_processed', 'N/A')
+                rotation_info = f", rotation: {best_filtered.get('best_rotation', 0)}°" if best_filtered.get('best_rotation', 0) != 0 else ", no rotation needed"
+                details = f"Multi-Candidate Winner #{winning_candidate}/{total_candidates}: axis={best_filtered['axis']}, index={best_filtered['index']}{rotation_info}{fossil_info}"
+            elif pipeline_mode == "orthogonal":
                 details = f"Orthogonal axis={best_filtered['axis']}, index={best_filtered['index']}{fossil_info}"
-            elif best_filtered["mode"] == "heavy_rotation":
+            elif pipeline_mode == "heavy_rotation":
                 axis_names = {(0,2): "XZ rotation", (0,1): "XY rotation", (1,2): "YZ rotation"}
                 axis_name = axis_names.get(best_filtered.get('rotation_axis'), 'Unknown axis')
                 details = f"Heavy Rotation: {best_filtered.get('rotation_angle', 'Unknown')}° {axis_name}, slice {best_filtered.get('slice_index', 'Unknown')}{fossil_info}"
-            elif best_filtered["mode"] == "diagonal":
+            elif pipeline_mode == "diagonal":
                 details = f"Diagonal angles={best_filtered['angles']}"
+            elif pipeline_mode == "two_stage_rotation_invariant":
+                rotation_info = f", rotation: {best_filtered.get('best_rotation', 0)}°" if best_filtered.get('best_rotation', 0) != 0 else ", no rotation needed"
+                details = f"Two-Stage + Rotation: axis={best_filtered['axis']}, index={best_filtered['index']}{rotation_info}{fossil_info}"
+            elif pipeline_mode == "two_stage":
+                details = f"Two-Stage: axis={best_filtered['axis']}, index={best_filtered['index']}{fossil_info}"
             else:
-                details = f"Mode: {best_filtered['mode']}"
+                details = f"Mode: {pipeline_mode}"
             
             # Display images side by side
             col1, col2 = st.columns(2)
@@ -2780,11 +4751,27 @@ with tab3:
                 # Show match statistics
                 col2a, col2b = st.columns(2)
                 with col2a:
-                    st.metric("SSIM", f"{best_filtered['ssim']:.4f}")
-                    st.metric("Combined", f"{best_filtered['score']:.4f}")
+                    pipeline_mode = best_filtered.get('mode', '')
+                    if pipeline_mode.startswith('multi_candidate') or pipeline_mode.startswith('two_stage'):
+                        # Enhanced pipelines with all four metrics
+                        st.metric("Dice Score", f"{best_filtered.get('dice', 0):.4f}")
+                        st.metric("Final Score", f"{best_filtered['score']:.4f}")
+                        if 'orb' in best_filtered:
+                            st.metric("ORB Features", f"{best_filtered.get('orb', 0):.4f}")
+                    else:
+                        # Single-stage pipeline (legacy)
+                        st.metric("SSIM", f"{best_filtered.get('ssim', 0):.4f}")
+                        st.metric("Combined", f"{best_filtered['score']:.4f}")
                 with col2b:
-                    st.metric("NCC", f"{best_filtered['ncc']:.4f}")
-                    st.metric("Species", species)
+                    st.metric("NCC", f"{best_filtered.get('ncc', 0):.4f}")
+                    if 'ssim' in best_filtered and best_filtered.get('ssim', 0) > 0:
+                        st.metric("SSIM", f"{best_filtered.get('ssim', 0):.4f}")
+                    if best_filtered.get('best_rotation', 0) != 0:
+                        st.metric("Rotation", f"{best_filtered['best_rotation']}°")
+                    elif 'orb_matches' in best_filtered:
+                        st.metric("ORB Matches", f"{best_filtered.get('orb_matches', 0)}")
+                    else:
+                        st.metric("Species", species)
             
             # Match quality assessment
             score = best_filtered['score']
@@ -2796,9 +4783,230 @@ with tab3:
                 st.warning("⚠️ **Moderate Match** - Consider examining multiple top results")
             else:
                 st.error("❌ **Low Match Quality** - Results may not be reliable")
+            
+            # Top Results Explorer - Now Always Available
+            st.markdown("---")
+            st.markdown("### 🔍 **Top Results Explorer**")
+            
+            if score >= 0.8:
+                st.info("Explore the top candidates to understand the matching process and verify the identification.")
+            elif score >= 0.7:
+                st.info("Since this is a moderate match, examine the top candidates to make an informed decision.")
+            else:
+                st.warning("Results have low confidence scores. Use this explorer to find potential better matches.")
+            
+            # Show top N results for comparison
+            num_top_results = min(5, len(filtered_results))
+            
+            if num_top_results > 1:
+                    # Create tabs for each top result
+                    tab_labels = []
+                    for i, result in enumerate(filtered_results[:num_top_results]):
+                        species = get_species_from_filename(result['model'])
+                        score_str = f"{result['score']:.3f}"
+                        rank_emoji = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i]
+                        tab_labels.append(f"{rank_emoji} {species} ({score_str})")
+                    
+                    # Create tabs for comparison
+                    result_tabs = st.tabs(tab_labels)
+                    
+                    for i, (tab, result) in enumerate(zip(result_tabs, filtered_results[:num_top_results])):
+                        with tab:
+                            species = get_species_from_filename(result['model'])
+                            
+                            # Display result information
+                            col1, col2 = st.columns([2, 1])
+                            
+                            with col1:
+                                # Get the matched slice for this result
+                                if 'slice_2d' in result and result['slice_2d'] is not None:
+                                    matched_slice = result["slice_2d"].cpu().numpy()[0, 0]
+                                    
+                                    # Normalize for display
+                                    mi, ma = matched_slice.min(), matched_slice.max()
+                                    if ma - mi > 1e-8:
+                                        matched_slice_display = (matched_slice - mi) / (ma - mi)
+                                    else:
+                                        matched_slice_display = np.zeros_like(matched_slice)
+                                    
+                                    # Create comparison display
+                                    fig_cols = st.columns(2)
+                                    
+                                    with fig_cols[0]:
+                                        # Show uploaded slice again for comparison
+                                        uploaded_display = st.session_state.slice_display_np
+                                        st.image(uploaded_display, 
+                                                caption="📤 Your Uploaded Slice", 
+                                                use_container_width=True)
+                                    
+                                    with fig_cols[1]:
+                                        # Show this result's matched slice
+                                        pipeline_mode = result.get('mode', 'unknown')
+                                        if pipeline_mode.startswith('multi_candidate'):
+                                            pipeline_info = "Multi-Candidate"
+                                        elif pipeline_mode.startswith('two_stage'):
+                                            pipeline_info = "Two-Stage"
+                                        else:
+                                            pipeline_info = "Single-Stage"
+                                        
+                                        st.image(matched_slice_display, 
+                                                caption=f"🎯 Match from {species}\n({pipeline_info})", 
+                                                use_container_width=True)
+                                else:
+                                    st.warning("⚠️ No slice image available for this result")
+                            
+                            with col2:
+                                # Show detailed metrics for this result
+                                st.markdown(f"""
+                                    <div class="metric-card">
+                                        <h4>📊 Match Details</h4>
+                                        <p><strong>Species:</strong> {species}</p>
+                                        <p><strong>Model:</strong> {result['model']}</p>
+                                        <p><strong>Score:</strong> {result['score']:.4f}</p>
+                                        <hr>
+                                """, unsafe_allow_html=True)
+                                
+                                # Show appropriate metrics based on pipeline type
+                                pipeline_mode = result.get('mode', 'unknown')
+                                
+                                if pipeline_mode in ['multi_candidate_two_stage', 'multi_candidate_rotation_invariant', 'two_stage', 'two_stage_rotation_invariant']:
+                                    # Multi-candidate or two-stage pipelines
+                                    if pipeline_mode.startswith('multi_candidate'):
+                                        pipeline_display = f"Multi-Candidate ({pipeline_mode.replace('multi_candidate_', '').replace('_', ' ').title()})"
+                                        
+                                        # Show multi-candidate specific info
+                                        winning_candidate = result.get('winning_candidate', 'N/A')
+                                        total_candidates = result.get('total_candidates_processed', 'N/A')
+                                        pipeline_info_extra = f"<p><strong>Winner:</strong> Candidate #{winning_candidate} of {total_candidates}</p>"
+                                    else:
+                                        pipeline_display = result.get('mode', 'Unknown').replace('_', ' ').title()
+                                        pipeline_info_extra = ""
+                                    
+                                    st.markdown(f"""
+                                        <p><strong>Pipeline:</strong> {pipeline_display}</p>
+                                        {pipeline_info_extra}
+                                        <p><strong>Dice Score:</strong> {result.get('dice', 0):.4f}</p>
+                                        <p><strong>NCC:</strong> {result.get('ncc', 0):.4f}</p>
+                                        <p><strong>SSIM:</strong> {result.get('ssim', 0):.4f}</p>
+                                    """, unsafe_allow_html=True)
+                                    
+                                    # Show ORB feature matching if available (show even if 0)
+                                    if 'orb' in result:
+                                        orb_matches = result.get('orb_matches', 0)
+                                        st.markdown(f"""
+                                            <p><strong>ORB Features:</strong> {result.get('orb', 0):.4f}</p>
+                                            <p><strong>Feature Matches:</strong> {orb_matches}</p>
+                                        """, unsafe_allow_html=True)
+                                    
+                                    # Show rotation information if available
+                                    if result.get('best_rotation', 0) != 0:
+                                        st.markdown(f"""
+                                            <p><strong>Rotation Applied:</strong> {result['best_rotation']}°</p>
+                                        """, unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"""
+                                        <p><strong>Pipeline:</strong> Single-Stage</p>
+                                        <p><strong>SSIM:</strong> {result.get('ssim', 0):.4f}</p>
+                                        <p><strong>NCC:</strong> {result.get('ncc', 0):.4f}</p>
+                                    """, unsafe_allow_html=True)
+                                
+                                # Show pose information
+                                if result.get('axis') is not None:
+                                    axis_name = ["Axial", "Coronal", "Sagittal"][result['axis']]
+                                    st.markdown(f"""
+                                        <p><strong>Orientation:</strong> {axis_name}</p>
+                                        <p><strong>Slice Index:</strong> {result.get('index', 'N/A')}</p>
+                                    """, unsafe_allow_html=True)
+                                elif result.get('angles'):
+                                    st.markdown(f"""
+                                        <p><strong>Type:</strong> Diagonal</p>
+                                        <p><strong>Angles:</strong> {result['angles']}</p>
+                                    """, unsafe_allow_html=True)
+                                
+                                st.markdown("</div>", unsafe_allow_html=True)
+                                
+                                # Quality assessment for this specific result
+                                result_score = result['score']
+                                if result_score >= 0.85:
+                                    st.success("✅ **Strong candidate**")
+                                elif result_score >= 0.75:
+                                    st.warning("⚠️ **Moderate confidence**")
+                                else:
+                                    st.error("❌ **Low confidence**")
+                    
+                    # Add comparison guidance
+                    st.markdown("---")
+                    st.markdown("### 🎯 **Analysis Guidance**")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("""
+                            **🔍 What to Look For:**
+                            - **Structural Similarity**: Compare fossil shapes and features
+                            - **Size Proportions**: Check if overall dimensions match
+                            - **Key Features**: Look for diagnostic characteristics
+                            - **Surface Textures**: Compare surface patterns and details
+                        """)
+                    
+                    with col2:
+                        st.markdown("""
+                            **📊 Score Interpretation:**
+                            - **> 0.85**: Very likely correct identification
+                            - **0.75-0.85**: Good candidate, examine visually
+                            - **0.70-0.75**: Possible match, compare with others
+                            - **< 0.70**: Less likely, but worth considering
+                        """)
+                    
+                    # Species summary for moderate matches
+                    unique_species_in_top = list(set([get_species_from_filename(r['model']) for r in filtered_results[:num_top_results]]))
+                    
+                    if len(unique_species_in_top) > 1:
+                        st.info(f"**🧬 Multiple Species Detected:** {len(unique_species_in_top)} different species in top {num_top_results} results: {', '.join(unique_species_in_top)}")
+                        
+                        # Add a decision helper for multiple species
+                        st.markdown("### 🤔 **Decision Helper**")
+                        
+                        # Calculate species-level scores
+                        species_scores = {}
+                        species_counts = {}
+                        for result in filtered_results[:num_top_results]:
+                            species = get_species_from_filename(result['model'])
+                            if species not in species_scores:
+                                species_scores[species] = []
+                                species_counts[species] = 0
+                            species_scores[species].append(result['score'])
+                            species_counts[species] += 1
+                        
+                        # Display species comparison
+                        st.markdown("**Species-Level Analysis:**")
+                        for species in unique_species_in_top:
+                            scores = species_scores[species]
+                            avg_score = np.mean(scores)
+                            max_score = np.max(scores)
+                            count = species_counts[species]
+                            
+                            st.markdown(f"""
+                                <div style="padding: 0.5rem; margin: 0.25rem 0; border-left: 3px solid #60a5fa; background: rgba(96, 165, 250, 0.1);">
+                                    <strong>🦕 {species}</strong><br>
+                                    <small>Models in top {num_top_results}: {count} | Avg Score: {avg_score:.4f} | Best Score: {max_score:.4f}</small>
+                                </div>
+                            """, unsafe_allow_html=True)
+                        
+                        # Recommendation
+                        best_species = max(unique_species_in_top, key=lambda s: np.mean(species_scores[s]))
+                        st.success(f"**🎯 Recommendation:** Based on average scores, **{best_species}** appears most likely.")
+                    else:
+                        st.success(f"**🧬 Consistent Species:** All top {num_top_results} results point to **{unique_species_in_top[0]}**")
+                        st.info("Multiple models of the same species show similar matches - this increases confidence in the identification.")
                 
+            else:
+                st.info("Only one result meets the threshold criteria.")
+        
         else:
-            st.warning("⚠️ No models meet the current threshold")
+            st.info("Only one result available for comparison.")
+            
+    else:
+        st.warning("⚠️ No models meet the current threshold")
 
 with tab4:
     st.markdown("### 📊 Analysis & Statistics")
@@ -2872,28 +5080,151 @@ with tab4:
             
             if valid_results:
                 all_scores = [r.get('score', 0) for r in valid_results]
-                all_ssim = [r.get('ssim', 0) for r in valid_results]
-                all_ncc = [r.get('ncc', 0) for r in valid_results]
                 
-                col1, col2, col3 = st.columns(3)
+                # Check pipeline type for appropriate metrics
+                pipeline_modes = [r.get('mode', '') for r in valid_results]
+                is_two_stage = any(mode.startswith('two_stage') for mode in pipeline_modes)
+                is_multi_candidate = any(mode.startswith('multi_candidate') for mode in pipeline_modes)
                 
-                with col1:
-                    st.metric("📊 Combined Score", f"{np.mean(all_scores):.4f}", f"±{np.std(all_scores):.4f}")
-                    st.metric("🔝 Best Score", f"{np.max(all_scores):.4f}")
+                if is_multi_candidate or is_two_stage:
+                    all_dice = [r.get('dice', 0) for r in valid_results]
+                    all_ncc = [r.get('ncc', 0) for r in valid_results]
+                    all_ssim = [r.get('ssim', 0) for r in valid_results]
                     
-                with col2:
-                    st.metric("🔍 SSIM Average", f"{np.mean(all_ssim):.4f}", f"±{np.std(all_ssim):.4f}")
-                    st.metric("🔍 SSIM Best", f"{np.max(all_ssim):.4f}")
+                    # Check for rotation information
+                    rotation_results = [r for r in valid_results if r.get('best_rotation', 0) != 0]
                     
-                with col3:
-                    st.metric("🎯 NCC Average", f"{np.mean(all_ncc):.4f}", f"±{np.std(all_ncc):.4f}")
-                    st.metric("🎯 NCC Best", f"{np.max(all_ncc):.4f}")
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("📊 Final Score", f"{np.mean(all_scores):.4f}", f"±{np.std(all_scores):.4f}")
+                        st.metric("🔝 Best Score", f"{np.max(all_scores):.4f}")
+                        
+                    with col2:
+                        st.metric("🎯 Dice Average", f"{np.mean(all_dice):.4f}", f"±{np.std(all_dice):.4f}")
+                        st.metric("🎯 Dice Best", f"{np.max(all_dice):.4f}")
+                        
+                    with col3:
+                        st.metric("🔍 NCC Average", f"{np.mean(all_ncc):.4f}", f"±{np.std(all_ncc):.4f}")
+                        st.metric("🔍 NCC Best", f"{np.max(all_ncc):.4f}")
+                    
+                    # # Show multi-candidate specific statistics if available
+                    # if is_multi_candidate:
+                    #     st.markdown("#### 🏆 Multi-Candidate Analysis")
+                        
+                    #     # Extract multi-candidate specific metrics
+                    #     multi_candidate_results = [r for r in valid_results if r.get('mode', '').startswith('multi_candidate')]
+                        
+                    #     if multi_candidate_results:
+                    #         winning_candidates = [r.get('winning_candidate', 1) for r in multi_candidate_results]
+                    #         total_candidates_list = [r.get('total_candidates_processed', 5) for r in multi_candidate_results]
+                    #         ranking_changes = [r.get('candidates_ranking_change', 0) for r in multi_candidate_results]
+                            
+                    #         col1, col2, col3 = st.columns(3)
+                            
+                    #         with col1:
+                    #             avg_winning_rank = np.mean(winning_candidates)
+                    #             st.metric("🏆 Average Winning Rank", f"{avg_winning_rank:.1f}")
+                                
+                    #         with col2:
+                    #             avg_candidates_processed = np.mean(total_candidates_list)
+                    #             st.metric("📊 Avg Candidates Processed", f"{avg_candidates_processed:.1f}")
+                                
+                    #         with col3:
+                    #             avg_ranking_changes = np.mean(ranking_changes)
+                    #             st.metric("🔄 Avg Ranking Changes", f"{avg_ranking_changes:.1f}")
+                            
+                    #         # Analyze winning candidate distribution
+                    #         if winning_candidates:
+                    #             st.markdown("##### 📈 Winning Candidate Distribution")
+                    #             fig = px.histogram(
+                    #                 x=winning_candidates,
+                    #                 nbins=max(winning_candidates),
+                    #                 title="Which Stage 1 Rank Won in Stage 2?",
+                    #                 labels={'x': 'Stage 1 Rank', 'y': 'Times Won'}
+                    #             )
+                    #             fig.update_layout(height=300)
+                    #             st.plotly_chart(fig, use_container_width=True)
+                                
+                    #             # Insights
+                    #             rank_1_wins = winning_candidates.count(1)
+                    #             total_multi_results = len(winning_candidates)
+                    #             rank_1_percentage = (rank_1_wins / total_multi_results) * 100 if total_multi_results > 0 else 0
+                                
+                    #             if rank_1_percentage >= 80:
+                    #                 st.success(f"🎯 **Excellent Stage 1 Performance**: {rank_1_percentage:.1f}% of Stage 1 top candidates won in Stage 2")
+                    #             elif rank_1_percentage >= 60:
+                    #                 st.info(f"✅ **Good Stage 1 Performance**: {rank_1_percentage:.1f}% of Stage 1 top candidates won in Stage 2")
+                    #             else:
+                    #                 st.warning(f"🔄 **Stage 2 Provides Value**: Only {rank_1_percentage:.1f}% of Stage 1 winners remained best after Stage 2 - multi-candidate approach is working!")
+                    
+                    # Show rotation statistics if rotation testing was used
+                    # if rotation_results:
+                    #     st.markdown("#### 🔄 Rotation Analysis")
+                        
+                    #     rotations_applied = [r['best_rotation'] for r in rotation_results]
+                    #     rotation_counts = {}
+                    #     for rot in rotations_applied:
+                    #         rotation_counts[rot] = rotation_counts.get(rot, 0) + 1
+                        
+                    #     col1, col2, col3 = st.columns(3)
+                        
+                    #     with col1:
+                    #         st.metric("🔄 Rotations Applied", f"{len(rotation_results)}/{len(valid_results)}")
+                            
+                    #     with col2:
+                    #         most_common_rotation = max(rotation_counts.items(), key=lambda x: x[1])
+                    #         st.metric("📊 Most Common Rotation", f"{most_common_rotation[0]}°")
+                            
+                    #     with col3:
+                    #         unique_rotations = len(set(rotations_applied))
+                    #         st.metric("🎯 Unique Rotations Found", unique_rotations)
+                        
+                    #     # Show rotation distribution
+                    #     if rotations_applied:
+                    #         st.markdown("##### 📈 Rotation Distribution")
+                    #         fig = px.histogram(
+                    #             x=rotations_applied,
+                    #             nbins=12,
+                    #             title="Applied Rotations Distribution",
+                    #             labels={'x': 'Rotation Angle (degrees)', 'y': 'Count'}
+                    #         )
+                    #         fig.update_layout(height=300)
+                    #         st.plotly_chart(fig, use_container_width=True)
+                else:
+                    # Original single-stage metrics
+                    all_ssim = [r.get('ssim', 0) for r in valid_results]
+                    all_ncc = [r.get('ncc', 0) for r in valid_results]
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("📊 Combined Score", f"{np.mean(all_scores):.4f}", f"±{np.std(all_scores):.4f}")
+                        st.metric("🔝 Best Score", f"{np.max(all_scores):.4f}")
+                        
+                    with col2:
+                        st.metric("🔍 SSIM Average", f"{np.mean(all_ssim):.4f}", f"±{np.std(all_ssim):.4f}")
+                        st.metric("🔍 SSIM Best", f"{np.max(all_ssim):.4f}")
+                        
+                    with col3:
+                        st.metric("🎯 NCC Average", f"{np.mean(all_ncc):.4f}", f"±{np.std(all_ncc):.4f}")
+                        st.metric("🎯 NCC Best", f"{np.max(all_ncc):.4f}")
+                    
+                    with col1:
+                        st.metric("📊 Combined Score", f"{np.mean(all_scores):.4f}", f"±{np.std(all_scores):.4f}")
+                        st.metric("🔝 Best Score", f"{np.max(all_scores):.4f}")
+                        
+                    with col2:
+                        st.metric("🔍 SSIM Average", f"{np.mean(all_ssim):.4f}", f"±{np.std(all_ssim):.4f}")
+                        st.metric("🔍 SSIM Best", f"{np.max(all_ssim):.4f}")
+                        
+                    with col3:
+                        st.metric("🎯 NCC Average", f"{np.mean(all_ncc):.4f}", f"±{np.std(all_ncc):.4f}")
+                        st.metric("🎯 NCC Best", f"{np.max(all_ncc):.4f}")
             else:
                 st.warning("⚠️ No valid matching results for statistics")
         else:
             st.warning("⚠️ No matching results available for statistics")
-            st.metric("🎯 NCC Average", f"{np.mean(all_ncc):.4f}", f"±{np.std(all_ncc):.4f}")
-            st.metric("🎯 NCC Best", f"{np.max(all_ncc):.4f}")
 
 with tab5:
     st.header("🔬 3D Visualization")
@@ -2931,9 +5262,11 @@ with tab5:
                 <p><strong>Model:</strong> <span style="color: #FFFF00;">{best_match['model']}</span></p>
                 <p><strong>Species:</strong> <span style="color: #FFFF00;">{get_species_from_filename(best_match['model'])}</span></p>
                 <p>
-                    <strong>Combined Score:</strong> <span style="color: #FFFF00;">{best_match['score']:.4f}</span>,
+                    <strong>Combined Score:</strong> <span style="color: #FFFF00;">{best_match['score']:.4f}</span>
+                    {f", <strong>Dice:</strong> <span style='color: #FFFF00;'>{best_match.get('dice', 0):.4f}</span>" if best_match.get('mode') in ['two_stage', 'two_stage_rotation_invariant', 'multi_candidate_two_stage', 'multi_candidate_rotation_invariant'] else ""},
                     <strong> SSIM:</strong> <span style="color: #FFFF00;">{best_match.get('ssim', 0):.4f}</span>,
                     <strong> NCC:</strong> <span style="color: #FFFF00;">{best_match.get('ncc', 0):.4f}</span>
+                    {f", <strong>ORB:</strong> <span style='color: #FFFF00;'>{best_match.get('orb', 0):.4f}</span>" if 'orb' in best_match else ""}
                 </p>
                 <p><strong>Orientation:</strong> <span style="color: #FFFF00;">{get_orientation_name(best_match.get('axis', 0)).title() if 'axis' in best_match else best_match.get('mode', 'Unknown').title()}</span></p>
                 <p><strong>Slice Index:</strong> <span style="color: #FFFF00;">{best_match.get('index', 'N/A')}</span></p>
