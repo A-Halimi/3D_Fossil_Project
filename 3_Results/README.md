@@ -39,30 +39,43 @@ Each model has its own dedicated results directory containing:
 
 ### Individual Model Results
 
-Each model directory follows this standardized structure:
+Each model directory follows this actual structure:
 
 ```
 {model_name}/
 ├── ckpts/                          # Model checkpoints
-│   ├── best.keras                  # Best performing model
-│   ├── last.keras                  # Last epoch checkpoint
-│   └── epoch_*.keras               # Individual epoch saves
-├── reports/                        # Performance reports
-│   ├── classification_report.txt   # Detailed classification metrics
-│   ├── confusion_matrix.png        # Confusion matrix visualization
-│   └── per_class_metrics.csv       # Per-species performance data
-├── history/                        # Training logs
-│   ├── training_history.json       # Loss/accuracy curves data
-│   ├── training_plots.png          # Training/validation curves
-│   └── metrics_log.csv             # Epoch-by-epoch metrics
-├── predictions/                    # Model predictions
-│   ├── test_predictions.csv        # Test set predictions
-│   ├── validation_predictions.csv  # Validation predictions
-│   └── prediction_analysis.json    # Prediction statistics
-└── config/                         # Training configuration
-    ├── model_config.json           # Model architecture details
-    ├── training_params.json        # Hyperparameters used
-    └── dataset_info.json           # Dataset configuration
+│   └── best.keras                  # Best performing model checkpoint
+├── reports/                        # Performance reports and data
+│   ├── classification_report_{model}.txt   # Detailed classification metrics
+│   ├── class_map_{model}.json      # Class name mappings
+│   └── training_history_{model}.json       # Training history data
+├── figures/                        # Visualizations and plots
+│   ├── cm_{model}.pdf              # Confusion matrix visualization
+│   └── history_{model}.pdf         # Training/validation curves
+├── logs/                           # TensorBoard training logs
+│   └── {model}_{timestamp}/        # Timestamped training session logs
+├── fossil_{model}.keras            # Final trained model
+└── fossil_{model}_ema.keras        # EMA (Exponential Moving Average) model
+```
+
+### Final Production Model
+
+```
+fossil_classifier_final/
+├── model.keras                     # Final ensemble model for deployment
+└── class_names.json               # Species name mappings
+```
+
+### Comparative Analysis
+
+```
+_comparison/
+├── fossil_model_comparison_report_v2.md    # Comprehensive comparison report
+├── fossil_model_comparison_report_v2.csv   # Quantitative metrics comparison
+├── fossil_model_per_class_metrics_v2.csv   # Per-species performance data
+├── fossil_model_per_class_best_v2.csv      # Best performing models per class
+├── fossil_model_per_class_worst_v2.csv     # Challenging cases per class
+└── fossil_model_strengths_v2.json          # Model strengths analysis
 ```
 
 ## Getting Started
@@ -124,49 +137,167 @@ cat model_comparison_report.md
 #### 3. Load and Test Models
 
 ```python
-# Example: Load and test the best performing model
-import tensorflow as tf
-import numpy as np
-from PIL import Image
+# Example: Load and test the final ensemble model
+import os, json, pathlib, numpy as np, tensorflow as tf, cv2
+from tensorflow.keras import mixed_precision
+from skimage import filters, morphology, measure
+import matplotlib.pyplot as plt
 
-# Load the final ensemble model
-model = tf.keras.models.load_model('fossil_classifier_final/model.keras')
+# Setup environment
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+mixed_precision.set_global_policy("mixed_float16")
 
-# Load class names
-import json
-with open('fossil_classifier_final/class_names.json', 'r') as f:
+# Get project root and model paths
+PROJECT_ROOT = pathlib.Path.cwd().parent  # Adjust as needed
+DEPLOY_DIR = PROJECT_ROOT / "3_Results" / "fossil_classifier_final"
+MODEL_PATH = DEPLOY_DIR / "model.keras"
+CLASSES_PATH = DEPLOY_DIR / "class_names.json"
+
+# Load the final ensemble model and class names
+model = tf.keras.models.load_model(MODEL_PATH)
+with open(CLASSES_PATH, 'r') as f:
     class_names = json.load(f)
 
-# Test on a new image
-def predict_fossil(image_path):
-    img = Image.open(image_path).convert('RGB')
-    img = img.resize((224, 224))
-    img_array = tf.keras.preprocessing.image.img_to_array(img)
-    img_array = tf.expand_dims(img_array, 0)
-    img_array = img_array / 255.0
+# Advanced segmentation function for preprocessing
+def segment_image(image_path, assume_bright_fossil=True, invert_output=False):
+    """Segment fossil from background using Otsu thresholding"""
+    try:
+        img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return None
+        
+        # Apply Gaussian blur and Otsu thresholding
+        blurred = cv2.GaussianBlur(img, (3, 3), 0)
+        threshold = filters.threshold_otsu(blurred)
+        binary = blurred > threshold if assume_bright_fossil else blurred < threshold
+        
+        # Clean up segmentation
+        cleaned = morphology.remove_small_objects(binary, min_size=200)
+        cleaned = morphology.remove_small_holes(cleaned, area_threshold=100)
+        cleaned = morphology.binary_closing(cleaned, morphology.disk(2))
+        
+        # Extract main fossil region
+        labeled = measure.label(cleaned)
+        if labeled.max() == 0:
+            return None
+        
+        main_fossil_label = max(measure.regionprops(labeled), key=lambda x: x.area).label
+        mask = (labeled == main_fossil_label).astype(np.uint8) * 255
+        segmented_gray = cv2.bitwise_and(img, img, mask=mask)
+        
+        if invert_output:
+            fossil_pixels = segmented_gray[mask == 255]
+            segmented_gray[mask == 255] = 255 - fossil_pixels
+            
+        return segmented_gray
+    except Exception as e:
+        print(f"Error segmenting {image_path}: {e}")
+        return None
+
+# Prediction function
+def predict_fossil(image_path, use_clahe=False):
+    """Predict fossil species from image path"""
+    # Load and preprocess image
+    original_img_bgr = cv2.imread(str(image_path))
+    if original_img_bgr is None:
+        print(f"Could not read image at {image_path}")
+        return None
     
-    predictions = model.predict(img_array)
-    predicted_class = class_names[np.argmax(predictions[0])]
-    confidence = np.max(predictions[0])
+    # Check image brightness and apply appropriate segmentation
+    img_gray_for_check = cv2.cvtColor(original_img_bgr, cv2.COLOR_BGR2GRAY)
+    if np.mean(img_gray_for_check) > 190:
+        segmented_np = segment_image(image_path, assume_bright_fossil=False, invert_output=True)
+    else:
+        segmented_np = segment_image(image_path, assume_bright_fossil=True, invert_output=False)
     
-    return predicted_class, confidence
+    if segmented_np is None:
+        print(f"Segmentation failed for {image_path}")
+        return None
+    
+    # Optional CLAHE normalization
+    if use_clahe:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        segmented_np = clahe.apply(segmented_np)
+    
+    # Convert to RGB and create tensor
+    final_rgb_np = cv2.cvtColor(segmented_np, cv2.COLOR_GRAY2RGB)
+    img_tensor = tf.convert_to_tensor(final_rgb_np, dtype=tf.float32)
+    
+    # Apply the same cropping as used in training (crop_to_bbox)
+    # Note: This assumes the PatchEnsemble model handles preprocessing internally
+    
+    # Make prediction
+    predictions = model.predict(tf.expand_dims(img_tensor, 0))
+    probs = predictions[0]
+    
+    # Get top 5 predictions
+    top_5_indices = np.argsort(probs)[-5:][::-1]
+    
+    results = {
+        'predicted_class': class_names[top_5_indices[0]],
+        'confidence': float(probs[top_5_indices[0]]),
+        'top_5_predictions': [
+            {'class': class_names[idx], 'confidence': float(probs[idx])}
+            for idx in top_5_indices
+        ]
+    }
+    
+    return results
+
+# Example usage
+image_path = "path/to/your/fossil/image.png"
+result = predict_fossil(image_path, use_clahe=False)
+if result:
+    print(f"Predicted: {result['predicted_class']}")
+    print(f"Confidence: {result['confidence']:.4f}")
+    print("Top 5 predictions:")
+    for pred in result['top_5_predictions']:
+        print(f"  {pred['class']}: {pred['confidence']:.4f}")
 ```
 
 ## Key Metrics and Performance
 
 ### Model Performance Summary
 
-Based on the comprehensive evaluation, here are the typical performance ranges:
+Based on the comprehensive evaluation from `fossil_model_comparison_report_v2.md`:
 
-#### Top Performing Models
-1. **ConvNeXt Large**: ~94-96% accuracy
-2. **EfficientNetV2 Large**: ~93-95% accuracy  
-3. **Final Ensemble**: ~95-97% accuracy (best overall)
+#### Top Performing Models (Accuracy Leaderboard)
+1. **ConvNeXt Large**: 95.12% accuracy (Top-3: 99.63%, AUC: 0.9978)
+2. **NASNet**: 93.69% accuracy (Top-3: 99.15%, AUC: 0.9958)  
+3. **EfficientNetV2 Large**: 93.53% accuracy (Top-3: 99.42%, AUC: 0.9957)
+4. **EfficientNetV2 Small**: 91.82% accuracy (Top-3: 99.54%, AUC: 0.9956)
+5. **ConvNeXt Base**: 91.34% accuracy (Top-3: 98.39%, AUC: 0.9926)
+6. **MobileNet**: 88.02% accuracy (Top-3: 99.35%, AUC: 0.9949)
+7. **ResNet101V2**: 84.34% accuracy (Top-3: 97.40%, AUC: 0.9835)
 
-#### Per-Species Performance
-- **Easy Classes**: Alveolina, Fallotia (>95% accuracy)
-- **Moderate Classes**: Arumella, Chrysalidina (90-95% accuracy)
-- **Challenging Classes**: Ataxophragmium, Minoxia (85-90% accuracy)
+#### Macro F1-Score Performance
+1. **ConvNeXt Large**: 0.9406 (best overall balance)
+2. **NASNet**: 0.9254 
+3. **EfficientNetV2 Large**: 0.9198
+4. **EfficientNetV2 Small**: 0.9061
+5. **ConvNeXt Base**: 0.8770
+6. **MobileNet**: 0.8602
+7. **ResNet101V2**: 0.8083
+
+#### Per-Species Performance Insights
+
+**Consistently High Performers (>95% F1-Score across most models):**
+- **Fallotia**: Best overall (99.69-99.89% F1 across models)
+- **Ataxophragmium**: Excellent stability (98.49-99.36% F1)
+- **Arumella**: Strong performance (92.09-98.86% F1)
+- **Alveolina**: Reliable classification (96.18-98.39% F1)
+
+**Moderate Performers (85-95% F1-Score):**
+- **Lockhartia**: Good consistency (98.15-98.61% F1)
+- **Coskinolina**: Stable across models (94.33-98.23% F1)
+- **Chrysalidina**: Variable performance (67.92-97.07% F1)
+- **Minoxia**: Model-dependent (59.90-98.86% F1)
+
+**Challenging Species (Recognition Difficulties):**
+- **Baculogypsina**: Consistently challenging (14.84-66.35% F1)
+- **Orbitoides**: Moderate difficulty (59.52-85.30% F1)
+- **Elphidiella**: Variable across models (76.70-98.53% F1)
 
 ### Evaluation Metrics
 
@@ -182,61 +313,187 @@ Each model is evaluated using:
 
 ### Automated Analysis Tools
 
-The [`_comparison/`](_comparison/) directory contains:
+The [`_comparison/`](_comparison/) directory contains the actual generated files:
 
 #### Performance Reports
-- **`model_comparison_report.md`** - Human-readable markdown summary
-- **`overall_metrics.csv`** - Quantitative comparison table
-- **`per_class_analysis.csv`** - Species-specific performance breakdown
-- **`statistical_tests.json`** - Significance testing results
+- **`fossil_model_comparison_report_v2.md`** - Comprehensive comparison report with detailed analysis
+- **`fossil_model_comparison_report_v2.csv`** - Quantitative metrics comparison table
+- **`fossil_model_per_class_metrics_v2.csv`** - Per-species performance breakdown for all models
+- **`fossil_model_per_class_best_v2.csv`** - Best performing models identified per class
+- **`fossil_model_per_class_worst_v2.csv`** - Challenging cases and model weaknesses per class
+- **`fossil_model_strengths_v2.json`** - Structured analysis of model strengths and recommendations
 
-#### Visualizations
-- **`accuracy_comparison.png`** - Overall accuracy comparison
-- **`per_class_heatmap.png`** - Per-species performance heatmap
-- **`confusion_matrices_grid.png`** - Side-by-side confusion matrices
-- **`training_curves_comparison.png`** - Training progress comparison
+#### Analysis Features
+- **Accuracy Leaderboards**: Ranked comparison across accuracy, macro F1, weighted F1, and precision/recall
+- **Per-Class Analysis**: Species-specific performance comparison across all 7 models
+- **Statistical Significance**: Model performance comparisons with confidence intervals
+- **Ensemble Recommendations**: Data-driven suggestions for model combination strategies
+
+### Generated Insights from Comparison Analysis
+
+#### Model Performance Tiers
+
+**Tier 1 - Production Ready (>95% Accuracy):**
+- **ConvNeXt Large**: 95.12% accuracy, best overall performance
+- Exceptional macro F1 (0.9406) and balanced precision/recall
+
+**Tier 2 - High Performance (93-95% Accuracy):**
+- **NASNet**: 93.69% accuracy, excellent AUC (0.9958)
+- **EfficientNetV2 Large**: 93.53% accuracy, efficiency leader
+
+**Tier 3 - Deployment Options (90-93% Accuracy):**
+- **EfficientNetV2 Small**: 91.82% accuracy, resource-efficient
+- **ConvNeXt Base**: 91.34% accuracy, solid baseline
+
+**Tier 4 - Specialized Use Cases (<90% Accuracy):**
+- **MobileNet**: 88.02% accuracy, mobile/edge deployment
+- **ResNet101V2**: 84.34% accuracy, legacy comparison baseline
+
+#### Species-Specific Model Recommendations
+
+**For Consistent High Performance:**
+- **Fallotia**: All models excellent (>99.6% F1) - deployment flexible
+- **Ataxophragmium**: ConvNeXt Large leads (99.23% F1) - use for critical applications
+
+**For Challenging Species:**
+- **Baculogypsina**: ConvNeXt Large best (65.25% F1) - requires ensemble approach
+- **Orbitoides**: Multiple models competitive - ensemble recommended
+
+**For Resource-Constrained Deployment:**
+- **EfficientNetV2 Small**: Best accuracy/efficiency trade-off
+- **MobileNet**: Minimum viable performance for mobile applications
 
 ### Key Insights from Comparison
 
-#### Model Strengths
-- **ConvNeXt**: Best overall performance, stable training
-- **EfficientNetV2**: Excellent efficiency/accuracy trade-off
-- **MobileNet**: Fastest inference, good for mobile deployment
-- **Ensemble**: Highest accuracy, reduced overfitting
+#### Model Strengths by Architecture
 
-#### Species-Specific Insights
-- **Ensemble excels** at challenging species (Ataxophragmium, Minoxia)
-- **ConvNeXt** shows most consistent performance across all species
-- **EfficientNetV2** provides best resource efficiency
+**ConvNeXt Large - The Overall Champion:**
+- **Best overall accuracy**: 95.12% with exceptional macro F1 (0.9406)
+- **Consistent performance**: Leads in macro precision (0.9615) and recall (0.9366)
+- **Reliable across species**: Strong performance on challenging classes
+- **Production ready**: Best choice for high-accuracy requirements
+
+**NASNet - The Balanced Performer:**
+- **Second-best accuracy**: 93.69% with solid top-3 performance (99.15%)
+- **Excellent AUC**: 0.9958 indicating strong probabilistic calibration
+- **Research value**: Good comparative baseline for advanced architectures
+
+**EfficientNetV2 Models - The Efficiency Leaders:**
+- **Large variant**: 93.53% accuracy with excellent efficiency trade-off
+- **Small variant**: 91.82% accuracy, ideal for resource-constrained deployment
+- **High top-3 accuracy**: Both variants achieve >99.4% top-3 performance
+- **Deployment friendly**: Best balance of accuracy and computational efficiency
+
+**MobileNet - The Edge Champion:**
+- **Mobile optimized**: 88.02% accuracy with minimal computational requirements
+- **Surprising top-3**: 99.35% top-3 accuracy despite lower overall performance
+- **Edge deployment**: Ideal for mobile applications and embedded systems
+
+#### Species-Specific Model Strengths
+
+**For Challenging Species (Baculogypsina, Orbitoides):**
+- **ConvNeXt Large excels**: Best performance on difficult-to-classify species
+- **EfficientNetV2 Small**: Surprisingly competitive on Baculogypsina (66.35% F1)
+- **Ensemble opportunity**: Different models struggle with different aspects
+
+**For High-Performance Species (Fallotia, Ataxophragmium):**
+- **Universal success**: All models perform well (>95% F1)
+- **ConvNeXt Large leads**: Marginal but consistent advantage
+- **Deployment flexibility**: Multiple viable options for these species
+
+#### Practical Deployment Insights
+
+**Production Deployment Recommendations:**
+- **High accuracy**: Use ConvNeXt Large (95.12% accuracy)
+- **Balanced deployment**: EfficientNetV2 Large (93.53% accuracy, better efficiency)
+- **Resource-constrained**: EfficientNetV2 Small (91.82% accuracy, fast inference)
+- **Mobile/edge**: MobileNet (88.02% accuracy, minimal resources)
+
+**Ensemble Opportunities:**
+- **ConvNeXt Large + EfficientNetV2**: Complementary strengths for challenging species
+- **Class-specific routing**: Use best model per species for optimal performance
+- **Confidence-based switching**: Leverage different models based on prediction confidence
+
 
 ## Production Model Details
 
 ### Final Ensemble Model (`fossil_classifier_final/`)
 
-The production-ready model includes:
+The production-ready model contains the actual generated files:
 
 ```
 fossil_classifier_final/
-├── model.keras                     # Complete TensorFlow model
-├── class_names.json                # Species name mappings
-├── preprocessing_config.json       # Input preprocessing parameters
-├── model_metadata.json             # Model version and performance
-├── deployment_guide.md             # Integration instructions
-└── sample_predictions.json         # Example predictions for validation
+├── model.keras                     # PatchEnsemble model (ConvNeXt Large + EfficientNetV2 Small)
+└── class_names.json               # Species name mappings for 12 fossil classes
 ```
 
-#### Model Specifications
-- **Architecture**: ConvNeXt Large + EfficientNetV2 Small ensemble
-- **Input Size**: 224×224 RGB images
-- **Output**: 12-class probability distribution
-- **Model Size**: ~800MB
-- **Inference Time**: ~50ms per image (GPU), ~200ms (CPU)
+#### Model Architecture - PatchEnsemble Implementation
 
-#### Performance Metrics
-- **Test Accuracy**: 96.2%
-- **Average F1-Score**: 0.951
-- **Top-3 Accuracy**: 99.1%
-- **Model Confidence**: High confidence (>0.9) on 87% of predictions
+**Core Design:**
+- **Main Model**: ConvNeXt Large (95.12% individual accuracy)
+- **Patch Model**: EfficientNetV2 Small (91.82% individual accuracy)
+- **Ensemble Strategy**: Confidence-based switching for weak classes
+- **Weak Classes**: Baculogypsina, Orbitoides (challenging species)
+
+**Intelligent Switching Logic:**
+```python
+# Ensemble decision process:
+1. ConvNeXt Large makes primary prediction
+2. EfficientNetV2 Small makes secondary prediction  
+3. If primary prediction is weak class AND secondary has higher confidence:
+   → Use secondary prediction
+4. Else: Use primary prediction
+```
+
+#### Technical Specifications
+
+**Input Processing:**
+- **Input Size**: 384×384 RGB images (automatically resized internally)
+- **Preprocessing**: Built-in crop_to_bbox, ConvNeXt/EfficientNet preprocessing
+- **Segmentation**: Expects segmented fossil images with black backgrounds
+- **Normalization**: Model handles all preprocessing internally
+
+**Output Format:**
+- **Classes**: 12 fossil species probability distribution
+- **Normalization**: Probabilities sum to 1.0
+- **Confidence**: Can extract max probability as confidence score
+
+**Performance Characteristics:**
+- **Model Size**: ~800MB (combined ConvNeXt Large + EfficientNetV2 Small)
+- **Inference Time**: ~50ms per image (GPU), ~200ms (CPU)
+- **Memory Requirements**: ~2GB GPU VRAM for inference
+- **Input Flexibility**: Handles variable image sizes through internal resizing
+
+#### Actual Performance Metrics (Final Ensemble)
+
+Based on the ensemble notebook results:
+- **Test Accuracy**: 95.64% (51,468 test samples)
+- **Macro Average**: Precision 96.38%, Recall 94.52%, F1-Score 94.97%
+- **Weighted Average**: Precision 95.94%, Recall 95.64%, F1-Score 95.43%
+- **Top-3 Performance**: >99% (estimated from individual model performance)
+
+#### Per-Species Ensemble Performance
+
+**Excellent Performance (>98% F1):**
+- **Fallotia**: 99.66% F1 (best overall species)
+- **Ataxophragmium**: 99.24% F1 (consistent high performer)
+- **Arumella**: 98.70% F1 (stable classification)
+- **Lockhartia**: 98.39% F1 (reliable identification)
+- **Rhapydionina**: 98.29% F1 (distinctive morphology)
+
+**Strong Performance (95-98% F1):**
+- **Alveolina**: 97.33% F1 (classic foraminifera)
+- **Elphidiella**: 97.56% F1 (planispiral arrangement)
+- **Chrysalidina**: 95.78% F1 (elongated chambers)
+
+**Good Performance (90-95% F1):**
+- **Minoxia**: 94.10% F1 (small size challenge)
+- **Coskinolina**: 98.22% F1 (perforated structure)
+
+**Challenging Species (<90% F1):**
+- **Orbitoides**: 87.17% F1 (disc-shaped complexity)
+- **Baculogypsina**: 75.22% F1 (most challenging species)
+
 
 ## Connection to Other Sections
 
@@ -248,55 +505,6 @@ fossil_classifier_final/
 - **To Section 4**: Production model (`fossil_classifier_final/`) used in dashboard
 - **For Research**: Performance data for publications and further analysis
 
-## Advanced Analysis Tools
-
-### Custom Analysis Scripts
-
-Create custom analysis scripts in this directory:
-
-```python
-# example_analysis.py
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-def compare_model_confusion_matrices():
-    """Generate side-by-side confusion matrix comparison"""
-    models = ['convnext', 'effv2l', 'mobilenet']
-    
-    fig, axes = plt.subplots(1, len(models), figsize=(15, 5))
-    for i, model in enumerate(models):
-        # Load confusion matrix data
-        cm_path = f"{model}/reports/confusion_matrix_data.csv"
-        cm = pd.read_csv(cm_path, index_col=0)
-        
-        sns.heatmap(cm, annot=True, fmt='d', ax=axes[i])
-        axes[i].set_title(f'{model.title()} Model')
-    
-    plt.tight_layout()
-    plt.savefig('_comparison/confusion_matrices_comparison.png')
-    plt.show()
-
-def analyze_difficult_species():
-    """Identify consistently challenging species across models"""
-    # Implementation for cross-model difficult species analysis
-    pass
-```
-
-### Performance Monitoring
-
-```python
-# monitor_performance.py
-def track_model_degradation():
-    """Monitor for performance degradation over time"""
-    # Compare current results with baseline performance
-    pass
-
-def validate_model_robustness():
-    """Test model performance on edge cases"""
-    # Analyze performance on challenging samples
-    pass
-```
 
 ## Tips for Results Analysis
 
@@ -306,45 +514,11 @@ def validate_model_robustness():
 4. **Ensemble Benefits**: Ensemble reduces overconfident incorrect predictions
 5. **Resource Trade-offs**: Consider inference time vs. accuracy for deployment scenarios
 
-## Troubleshooting
-
-### Common Issues
-
-1. **Missing Results**: Ensure training completed successfully in Section 2
-2. **Corrupted Checkpoints**: Verify model files are not truncated
-3. **Inconsistent Metrics**: Check for changes in test set between runs
-4. **Memory Issues**: Use smaller batch sizes for large model inference
-
-### Performance Issues
-
-1. **Poor Accuracy**: Check for data leakage or inappropriate preprocessing
-2. **Overfitting**: Compare training vs. validation metrics
-3. **Class Imbalance**: Review per-class metrics for bias
-4. **Inference Speed**: Profile model components for bottlenecks
 
 ## Next Steps
 
 After analyzing results:
 1. **Deploy Best Model**: Use `fossil_classifier_final/` in Section 4 dashboard
-2. **Document Findings**: Update model cards with performance insights
-3. **Plan Improvements**: Identify areas for future model enhancement
-4. **Share Results**: Prepare visualizations for presentations/publications
 
-## Model Cards and Documentation
 
-### Model Performance Cards
 
-Each model directory includes standardized documentation:
-- Model architecture details
-- Training hyperparameters
-- Performance benchmarks
-- Known limitations
-- Recommended use cases
-
-### Reproducibility Information
-
-All results include complete configuration for reproducibility:
-- Exact training parameters
-- Dataset versions used
-- Random seeds and environment details
-- Library versions and dependencies
