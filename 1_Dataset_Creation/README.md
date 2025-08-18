@@ -190,6 +190,17 @@ docker run --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --r
 
 ### Step-by-Step Usage
 
+**💡 Quick Start Option**: All the steps below can be executed interactively using the comprehensive Jupyter notebook:
+
+```bash
+cd 1_Dataset_Creation
+jupyter lab Dataset_creation_segmented_final.ipynb
+```
+
+The notebook provides an all-in-one solution with real-time analysis, visualization, and automated execution of the entire pipeline. For users who prefer command-line execution or need to understand individual components, follow the detailed steps below.
+
+---
+
 #### 1. Prepare Input Data
 
 ```bash
@@ -213,7 +224,58 @@ python dataset_creation.py
 - `TEST_SPLIT_FRAC`: Test set fraction (default: 0.20)
 - `SAVE_FORMAT`: Output format - "png" or "npy" (default: "png")
 
-#### 3. Create Segmented Dataset
+#### 3. Create Three-Set Split (Train/Val/Test) with Low CV
+
+After the initial dataset creation, we need to create optimal train/validation/test splits with balanced distributions. This critical step ensures low coefficient of variation (CV) across species.
+
+**Run the interactive notebook for optimal splitting:**
+
+```bash
+jupyter lab Dataset_creation_segmented_final.ipynb
+```
+
+**Key Steps in the Notebook:**
+
+1. **Initial Dataset Analysis**:
+   - Count slices per species in the clean dataset
+   - Analyze current train/test distribution
+   - Calculate coefficient of variation to assess balance
+
+2. **Model-Level Train/Validation Split**:
+   - Target: ~1,000 validation slices per species
+   - Hard cap: 1,200 slices maximum per species  
+   - **Critical**: Split at 3D model level to prevent data leakage
+   - Brute-force optimization to hit target counts exactly
+
+3. **Balance Optimization Process**:
+   ```python
+   # The notebook performs intelligent model allocation:
+   # - Evaluates all possible model combinations per species
+   # - Selects combination closest to TARGET_VAL_SLICES (1000)
+   # - Applies VAL_CAP (1200) while maintaining ≥1 validation model
+   # - Ensures remaining models go to training set
+   ```
+
+4. **Final Balance Verification**:
+   - **Training CV**: ~13.91% (excellent balance)
+   - **Validation CV**: ~20.58% (good balance)  
+   - **Test CV**: ~24.72% (acceptable for testing)
+
+**Expected Output Structure**:
+```
+3d_fossil_dataset_clean/
+├── train_split/     # ~44,103 images (CV: 13.91%)
+├── val_split/       # ~14,046 images (CV: 20.58%)
+└── test/           # ~51,468 images (CV: 24.72%)
+```
+
+**Why This Step is Critical**:
+- ✅ **Prevents Data Leakage**: No slices from same fossil appear in different splits
+- ✅ **Optimizes Balance**: Minimizes coefficient of variation across species
+- ✅ **Scientific Rigor**: Maintains specimen-level independence
+- ✅ **Model Performance**: Balanced training leads to better generalization
+
+#### 4. Create Segmented Dataset
 
 ```bash
 # For individual species
@@ -223,12 +285,17 @@ python segment_fossils_black_bg.py
 python run_full_segmentation_black_bg.py
 ```
 
-#### 4. Interactive Analysis
+#### 5. Final Analysis and Verification
 
 ```bash
-# Launch Jupyter and open the notebook
+# Return to the notebook for final verification
 jupyter lab Dataset_creation_segmented_final.ipynb
 ```
+
+**Verify the final segmented dataset structure and balance:**
+- Check that `3d_fossil_dataset_segmented_final/` contains all three splits
+- Confirm coefficient of variation remains low across all species
+- Validate that segmentation preserved the balanced distributions
 
 ## Key Features
 
