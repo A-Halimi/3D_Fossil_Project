@@ -250,7 +250,7 @@ The final ensemble in [`DeepLearning_classification-ensemble_weighted_segmented-
 
 ### Minimum Requirements
 - **VRAM**: 8GB for small models (MobileNet, EfficientNetV2-S)
-- **VRAM**: 16GB+ for large models (ConvNeXt-L, EfficientNetV2-L)
+- **VRAM**: 32GB+ for large models (ConvNeXt-L, EfficientNetV2-L)
 - **RAM**: 32GB+ system memory recommended
 
 ### Training Time Estimates
