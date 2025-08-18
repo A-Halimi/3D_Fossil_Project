@@ -166,12 +166,6 @@ def get_bounding_box_crop(image):
 - Smart cropping to maximize fossil region coverage
 ```
 
-**Bounding-Box Crop Functionality:**
-- **Automatic Detection**: Identifies fossil regions in segmented images
-- **Adaptive Cropping**: Crops to tightest bounding box containing fossil content
-- **Background Reduction**: Minimizes black background pixels to focus model attention
-- **Content Preservation**: Ensures no fossil information is lost during cropping
-- **Consistent Sizing**: Resizes cropped regions to standard input dimensions
 
 #### Transfer Learning Strategy
 
