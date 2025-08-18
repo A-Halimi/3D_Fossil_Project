@@ -95,15 +95,15 @@ docker run --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --r
 ```bash
 cd 3_Results
 
-# View best model performance
-cat convnext/reports/classification_report.txt
+# View model performance reports
+cat convnextl/reports/classification_report_convnextl.txt
 
-# Check training curves
+# Check training history
 python -c "
 import json
 import matplotlib.pyplot as plt
 
-with open('convnext/history/training_history.json', 'r') as f:
+with open('convnextl/reports/training_history_convnextl.json', 'r') as f:
     history = json.load(f)
     
 plt.figure(figsize=(12, 4))
@@ -122,65 +122,55 @@ plt.show()
 "
 ```
 
-#### 2. Compare Model Performance
+#### 2. Generate and View Model Comparison
 
 ```bash
-# Generate comprehensive comparison report
+# Generate comprehensive comparison report (if not already done)
 cd ../2_AI_Modeling_Transfer_Learning
 python fossil_model_compare.py --results_root ../3_Results --output_dir ../3_Results/_comparison
 
 # View comparison results
 cd ../3_Results/_comparison
-cat model_comparison_report.md
+cat fossil_model_comparison_report_v2.md
 ```
 
-#### 3. Load and Test Models
+#### 3. Load and Test the Final Ensemble Model
 
 ```python
-# Example: Load and test the final ensemble model
+# Load and test the production-ready ensemble model
 import os, json, pathlib, numpy as np, tensorflow as tf, cv2
 from tensorflow.keras import mixed_precision
 from skimage import filters, morphology, measure
-import matplotlib.pyplot as plt
 
 # Setup environment
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 mixed_precision.set_global_policy("mixed_float16")
 
-# Get project root and model paths
+# Load model and class names
 PROJECT_ROOT = pathlib.Path.cwd().parent  # Adjust as needed
 DEPLOY_DIR = PROJECT_ROOT / "3_Results" / "fossil_classifier_final"
-MODEL_PATH = DEPLOY_DIR / "model.keras"
-CLASSES_PATH = DEPLOY_DIR / "class_names.json"
-
-# Load the final ensemble model and class names
-model = tf.keras.models.load_model(MODEL_PATH)
-with open(CLASSES_PATH, 'r') as f:
+model = tf.keras.models.load_model(DEPLOY_DIR / "model.keras")
+with open(DEPLOY_DIR / "class_names.json", 'r') as f:
     class_names = json.load(f)
 
-# Advanced segmentation function for preprocessing
+# Segmentation and prediction functions
 def segment_image(image_path, assume_bright_fossil=True, invert_output=False):
     """Segment fossil from background using Otsu thresholding"""
     try:
         img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            return None
+        if img is None: return None
         
-        # Apply Gaussian blur and Otsu thresholding
         blurred = cv2.GaussianBlur(img, (3, 3), 0)
         threshold = filters.threshold_otsu(blurred)
         binary = blurred > threshold if assume_bright_fossil else blurred < threshold
         
-        # Clean up segmentation
         cleaned = morphology.remove_small_objects(binary, min_size=200)
         cleaned = morphology.remove_small_holes(cleaned, area_threshold=100)
         cleaned = morphology.binary_closing(cleaned, morphology.disk(2))
         
-        # Extract main fossil region
         labeled = measure.label(cleaned)
-        if labeled.max() == 0:
-            return None
+        if labeled.max() == 0: return None
         
         main_fossil_label = max(measure.regionprops(labeled), key=lambda x: x.area).label
         mask = (labeled == main_fossil_label).astype(np.uint8) * 255
@@ -195,18 +185,16 @@ def segment_image(image_path, assume_bright_fossil=True, invert_output=False):
         print(f"Error segmenting {image_path}: {e}")
         return None
 
-# Prediction function
 def predict_fossil(image_path, use_clahe=False):
     """Predict fossil species from image path"""
-    # Load and preprocess image
     original_img_bgr = cv2.imread(str(image_path))
     if original_img_bgr is None:
         print(f"Could not read image at {image_path}")
         return None
     
-    # Check image brightness and apply appropriate segmentation
-    img_gray_for_check = cv2.cvtColor(original_img_bgr, cv2.COLOR_BGR2GRAY)
-    if np.mean(img_gray_for_check) > 190:
+    # Auto-detect segmentation approach based on image brightness
+    img_gray = cv2.cvtColor(original_img_bgr, cv2.COLOR_BGR2GRAY)
+    if np.mean(img_gray) > 190:
         segmented_np = segment_image(image_path, assume_bright_fossil=False, invert_output=True)
     else:
         segmented_np = segment_image(image_path, assume_bright_fossil=True, invert_output=False)
@@ -220,21 +208,15 @@ def predict_fossil(image_path, use_clahe=False):
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         segmented_np = clahe.apply(segmented_np)
     
-    # Convert to RGB and create tensor
+    # Convert to RGB and predict
     final_rgb_np = cv2.cvtColor(segmented_np, cv2.COLOR_GRAY2RGB)
     img_tensor = tf.convert_to_tensor(final_rgb_np, dtype=tf.float32)
-    
-    # Apply the same cropping as used in training (crop_to_bbox)
-    # Note: This assumes the PatchEnsemble model handles preprocessing internally
-    
-    # Make prediction
     predictions = model.predict(tf.expand_dims(img_tensor, 0))
     probs = predictions[0]
     
     # Get top 5 predictions
     top_5_indices = np.argsort(probs)[-5:][::-1]
-    
-    results = {
+    return {
         'predicted_class': class_names[top_5_indices[0]],
         'confidence': float(probs[top_5_indices[0]]),
         'top_5_predictions': [
@@ -242,16 +224,12 @@ def predict_fossil(image_path, use_clahe=False):
             for idx in top_5_indices
         ]
     }
-    
-    return results
 
 # Example usage
-image_path = "path/to/your/fossil/image.png"
-result = predict_fossil(image_path, use_clahe=False)
+result = predict_fossil("path/to/your/fossil/image.png", use_clahe=False)
 if result:
     print(f"Predicted: {result['predicted_class']}")
     print(f"Confidence: {result['confidence']:.4f}")
-    print("Top 5 predictions:")
     for pred in result['top_5_predictions']:
         print(f"  {pred['class']}: {pred['confidence']:.4f}")
 ```
