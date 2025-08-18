@@ -256,13 +256,15 @@ if result:
         print(f"  {pred['class']}: {pred['confidence']:.4f}")
 ```
 
-## Key Metrics and Performance
+## Model Performance Analysis and Comparison
 
-### Model Performance Summary
+### Comprehensive Model Evaluation
 
-Based on the comprehensive evaluation from `fossil_model_comparison_report_v2.md`:
+Based on the comprehensive evaluation from `fossil_model_comparison_report_v2.md`, the following analysis provides complete performance metrics, comparisons, and deployment insights.
 
-#### Top Performing Models (Accuracy Leaderboard)
+#### Overall Performance Leaderboards
+
+**Accuracy Ranking:**
 1. **ConvNeXt Large**: 95.12% accuracy (Top-3: 99.63%, AUC: 0.9978)
 2. **NASNet**: 93.69% accuracy (Top-3: 99.15%, AUC: 0.9958)  
 3. **EfficientNetV2 Large**: 93.53% accuracy (Top-3: 99.42%, AUC: 0.9957)
@@ -271,7 +273,7 @@ Based on the comprehensive evaluation from `fossil_model_comparison_report_v2.md
 6. **MobileNet**: 88.02% accuracy (Top-3: 99.35%, AUC: 0.9949)
 7. **ResNet101V2**: 84.34% accuracy (Top-3: 97.40%, AUC: 0.9835)
 
-#### Macro F1-Score Performance
+**Macro F1-Score Ranking:**
 1. **ConvNeXt Large**: 0.9406 (best overall balance)
 2. **NASNet**: 0.9254 
 3. **EfficientNetV2 Large**: 0.9198
@@ -280,139 +282,106 @@ Based on the comprehensive evaluation from `fossil_model_comparison_report_v2.md
 6. **MobileNet**: 0.8602
 7. **ResNet101V2**: 0.8083
 
-#### Per-Species Performance Insights
+### Model Performance Tiers and Deployment Strategy
 
-**Consistently High Performers (>95% F1-Score across most models):**
-- **Fallotia**: Best overall (99.69-99.89% F1 across models)
-- **Ataxophragmium**: Excellent stability (98.49-99.36% F1)
-- **Arumella**: Strong performance (92.09-98.86% F1)
-- **Alveolina**: Reliable classification (96.18-98.39% F1)
+#### Tier 1 - Production Ready (>95% Accuracy)
+**ConvNeXt Large - The Overall Champion:**
+- **Performance**: 95.12% accuracy, exceptional macro F1 (0.9406)
+- **Strengths**: Leads in macro precision (0.9615) and recall (0.9366)
+- **Use Case**: Best choice for high-accuracy production requirements
+- **Species Excellence**: Strong performance on challenging classes (Baculogypsina: 65.25% F1)
 
-**Moderate Performers (85-95% F1-Score):**
-- **Lockhartia**: Good consistency (98.15-98.61% F1)
-- **Coskinolina**: Stable across models (94.33-98.23% F1)
-- **Chrysalidina**: Variable performance (67.92-97.07% F1)
-- **Minoxia**: Model-dependent (59.90-98.86% F1)
+#### Tier 2 - High Performance (93-95% Accuracy)
+**NASNet - The Balanced Performer:**
+- **Performance**: 93.69% accuracy, excellent AUC (0.9958)
+- **Strengths**: Strong probabilistic calibration, solid top-3 performance (99.15%)
+- **Use Case**: Research applications and comparative baseline
 
-**Challenging Species (Recognition Difficulties):**
-- **Baculogypsina**: Consistently challenging (14.84-66.35% F1)
-- **Orbitoides**: Moderate difficulty (59.52-85.30% F1)
-- **Elphidiella**: Variable across models (76.70-98.53% F1)
+**EfficientNetV2 Large - The Efficiency Leader:**
+- **Performance**: 93.53% accuracy, excellent efficiency trade-off
+- **Strengths**: Best balance of accuracy and computational efficiency
+- **Use Case**: Production deployment with resource consideration
 
-### Evaluation Metrics
+#### Tier 3 - Deployment Options (90-93% Accuracy)
+**EfficientNetV2 Small:**
+- **Performance**: 91.82% accuracy, resource-efficient
+- **Strengths**: Surprisingly competitive on challenging species (Baculogypsina: 66.35% F1)
+- **Use Case**: Resource-constrained deployment, edge computing
 
-Each model is evaluated using:
-- **Overall Accuracy**: Percentage of correctly classified samples
-- **Per-Class Precision**: True positives / (True positives + False positives)
-- **Per-Class Recall**: True positives / (True positives + False negatives)
-- **F1-Score**: Harmonic mean of precision and recall
-- **Confusion Matrix**: Detailed classification breakdown
-- **Top-3 Accuracy**: Percentage where correct class is in top 3 predictions
+**ConvNeXt Base:**
+- **Performance**: 91.34% accuracy, solid baseline
+- **Use Case**: General purpose applications
 
-## Model Comparison Features
+#### Tier 4 - Specialized Use Cases (<90% Accuracy)
+**MobileNet - The Edge Champion:**
+- **Performance**: 88.02% accuracy, minimal computational requirements
+- **Strengths**: Surprising top-3 accuracy (99.35%) despite lower overall performance
+- **Use Case**: Mobile applications and embedded systems
 
-### Automated Analysis Tools
+**ResNet101V2:**
+- **Performance**: 84.34% accuracy
+- **Use Case**: Legacy comparison baseline
 
-The [`_comparison/`](_comparison/) directory contains the actual generated files:
+### Per-Species Performance Analysis
+
+#### Consistently High Performers (>95% F1-Score across most models)
+- **Fallotia**: Best overall (99.69-99.89% F1 across models) - deployment flexible
+- **Ataxophragmium**: Excellent stability (98.49-99.36% F1) - ConvNeXt Large leads
+- **Arumella**: Strong performance (92.09-98.86% F1) - robust across architectures
+- **Alveolina**: Reliable classification (96.18-98.39% F1) - consistent performance
+
+#### Moderate Performers (85-95% F1-Score)
+- **Lockhartia**: Good consistency (98.15-98.61% F1) - reliable identification
+- **Coskinolina**: Stable across models (94.33-98.23% F1) - architecture independent
+- **Chrysalidina**: Variable performance (67.92-97.07% F1) - model dependent
+- **Minoxia**: Model-dependent (59.90-98.86% F1) - benefits from ensemble
+
+#### Challenging Species (Recognition Difficulties)
+- **Baculogypsina**: Consistently challenging (14.84-66.35% F1) - requires ensemble approach
+- **Orbitoides**: Moderate difficulty (59.52-85.30% F1) - multiple models competitive
+- **Elphidiella**: Variable across models (76.70-98.53% F1) - architecture sensitive
+
+### Automated Analysis Tools and Reports
+
+The [`_comparison/`](_comparison/) directory contains comprehensive analysis files:
 
 #### Performance Reports
-- **`fossil_model_comparison_report_v2.md`** - Comprehensive comparison report with detailed analysis
-- **`fossil_model_comparison_report_v2.csv`** - Quantitative metrics comparison table
-- **`fossil_model_per_class_metrics_v2.csv`** - Per-species performance breakdown for all models
-- **`fossil_model_per_class_best_v2.csv`** - Best performing models identified per class
-- **`fossil_model_per_class_worst_v2.csv`** - Challenging cases and model weaknesses per class
-- **`fossil_model_strengths_v2.json`** - Structured analysis of model strengths and recommendations
+- **`fossil_model_comparison_report_v2.md`** - Detailed comparison with insights
+- **`fossil_model_comparison_report_v2.csv`** - Quantitative metrics table
+- **`fossil_model_per_class_metrics_v2.csv`** - Per-species performance breakdown
+- **`fossil_model_per_class_best_v2.csv`** - Best performing models per class
+- **`fossil_model_per_class_worst_v2.csv`** - Challenging cases analysis
+- **`fossil_model_strengths_v2.json`** - Structured model strengths analysis
 
 #### Analysis Features
-- **Accuracy Leaderboards**: Ranked comparison across accuracy, macro F1, weighted F1, and precision/recall
+- **Accuracy Leaderboards**: Ranked comparisons across multiple metrics
 - **Per-Class Analysis**: Species-specific performance comparison across all 7 models
 - **Statistical Significance**: Model performance comparisons with confidence intervals
 - **Ensemble Recommendations**: Data-driven suggestions for model combination strategies
 
-### Generated Insights from Comparison Analysis
+### Deployment Recommendations
 
-#### Model Performance Tiers
-
-**Tier 1 - Production Ready (>95% Accuracy):**
-- **ConvNeXt Large**: 95.12% accuracy, best overall performance
-- Exceptional macro F1 (0.9406) and balanced precision/recall
-
-**Tier 2 - High Performance (93-95% Accuracy):**
-- **NASNet**: 93.69% accuracy, excellent AUC (0.9958)
-- **EfficientNetV2 Large**: 93.53% accuracy, efficiency leader
-
-**Tier 3 - Deployment Options (90-93% Accuracy):**
-- **EfficientNetV2 Small**: 91.82% accuracy, resource-efficient
-- **ConvNeXt Base**: 91.34% accuracy, solid baseline
-
-**Tier 4 - Specialized Use Cases (<90% Accuracy):**
-- **MobileNet**: 88.02% accuracy, mobile/edge deployment
-- **ResNet101V2**: 84.34% accuracy, legacy comparison baseline
-
-#### Species-Specific Model Recommendations
-
-**For Consistent High Performance:**
-- **Fallotia**: All models excellent (>99.6% F1) - deployment flexible
-- **Ataxophragmium**: ConvNeXt Large leads (99.23% F1) - use for critical applications
-
-**For Challenging Species:**
-- **Baculogypsina**: ConvNeXt Large best (65.25% F1) - requires ensemble approach
-- **Orbitoides**: Multiple models competitive - ensemble recommended
-
-**For Resource-Constrained Deployment:**
-- **EfficientNetV2 Small**: Best accuracy/efficiency trade-off
-- **MobileNet**: Minimum viable performance for mobile applications
-
-### Key Insights from Comparison
-
-#### Model Strengths by Architecture
-
-**ConvNeXt Large - The Overall Champion:**
-- **Best overall accuracy**: 95.12% with exceptional macro F1 (0.9406)
-- **Consistent performance**: Leads in macro precision (0.9615) and recall (0.9366)
-- **Reliable across species**: Strong performance on challenging classes
-- **Production ready**: Best choice for high-accuracy requirements
-
-**NASNet - The Balanced Performer:**
-- **Second-best accuracy**: 93.69% with solid top-3 performance (99.15%)
-- **Excellent AUC**: 0.9958 indicating strong probabilistic calibration
-- **Research value**: Good comparative baseline for advanced architectures
-
-**EfficientNetV2 Models - The Efficiency Leaders:**
-- **Large variant**: 93.53% accuracy with excellent efficiency trade-off
-- **Small variant**: 91.82% accuracy, ideal for resource-constrained deployment
-- **High top-3 accuracy**: Both variants achieve >99.4% top-3 performance
-- **Deployment friendly**: Best balance of accuracy and computational efficiency
-
-**MobileNet - The Edge Champion:**
-- **Mobile optimized**: 88.02% accuracy with minimal computational requirements
-- **Surprising top-3**: 99.35% top-3 accuracy despite lower overall performance
-- **Edge deployment**: Ideal for mobile applications and embedded systems
-
-#### Species-Specific Model Strengths
-
-**For Challenging Species (Baculogypsina, Orbitoides):**
-- **ConvNeXt Large excels**: Best performance on difficult-to-classify species
-- **EfficientNetV2 Small**: Surprisingly competitive on Baculogypsina (66.35% F1)
-- **Ensemble opportunity**: Different models struggle with different aspects
-
-**For High-Performance Species (Fallotia, Ataxophragmium):**
-- **Universal success**: All models perform well (>95% F1)
-- **ConvNeXt Large leads**: Marginal but consistent advantage
-- **Deployment flexibility**: Multiple viable options for these species
-
-#### Practical Deployment Insights
-
-**Production Deployment Recommendations:**
-- **High accuracy**: Use ConvNeXt Large (95.12% accuracy)
+#### Production Deployment Strategy
+- **High accuracy requirements**: ConvNeXt Large (95.12% accuracy)
 - **Balanced deployment**: EfficientNetV2 Large (93.53% accuracy, better efficiency)
 - **Resource-constrained**: EfficientNetV2 Small (91.82% accuracy, fast inference)
-- **Mobile/edge**: MobileNet (88.02% accuracy, minimal resources)
+- **Mobile/edge applications**: MobileNet (88.02% accuracy, minimal resources)
 
-**Ensemble Opportunities:**
-- **ConvNeXt Large + EfficientNetV2**: Complementary strengths for challenging species
+#### Ensemble Opportunities
+- **ConvNeXt Large + EfficientNetV2 Small**: Implemented in final production model
 - **Class-specific routing**: Use best model per species for optimal performance
 - **Confidence-based switching**: Leverage different models based on prediction confidence
+- **Challenging species focus**: Ensemble particularly beneficial for Baculogypsina and Orbitoides
+
+### Evaluation Metrics Framework
+
+Each model evaluation includes:
+- **Overall Accuracy**: Percentage of correctly classified samples
+- **Top-3 Accuracy**: Percentage where correct class is in top 3 predictions (>97% across all models)
+- **Per-Class Precision/Recall**: Species-specific performance metrics
+- **F1-Score**: Harmonic mean of precision and recall for balanced assessment
+- **AUC Scores**: All models achieve >0.98 showing excellent probabilistic calibration
+- **Confusion Matrix**: Detailed classification breakdown for error analysis
 
 
 ## Production Model Details
