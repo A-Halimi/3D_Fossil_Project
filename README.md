@@ -125,7 +125,7 @@ ls fossil_classifier_final/
 cd ../4_Dashboard_App
 
 # Launch interactive dashboard
-streamlit run Home.py --server.port 8501 --server.address 0.0.0.0
+streamlit run Home.py --server.maxUploadSize 9000 --server.maxMessageSize 10000
 
 # Access at: http://localhost:8501
 ```
