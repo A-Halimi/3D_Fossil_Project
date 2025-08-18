@@ -119,8 +119,8 @@ After processing through the complete pipeline, the segmented dataset (`3d_fossi
 | Species | Total Models | Test Models | Train Models | Val Models | Test Images | Train Images | Val Images |
 |---------|--------------|-------------|--------------|------------|-------------|--------------|------------|
 | **Chrysalidina** | 16 | 3 | 10 | 3 | 5,111 | 3,782 | 1,079 |
-| **Ataxophragmium** | 7 | 1 | 4 | 1 | 4,898 | 3,943 | 993 |
-| **Baculogypsina** | 7 | 2 | 4 | 2 | 2,980 | 2,243 | 997 |
+| **Ataxophragmium** | 7 | 2 | 4 | 1 | 4,898 | 3,943 | 993 |
+| **Baculogypsina** | 7 | 2 | 4 | 1 | 2,980 | 2,243 | 997 |
 | **Elphidiella** | 6 | 1 | 4 | 1 | 3,385 | 4,048 | 1,012 |
 | **Alveolina** | 4 | 1 | 2 | 1 | 5,129 | 3,535 | 1,724 |
 | **Coskinolina** | 4 | 1 | 2 | 1 | 5,060 | 3,350 | 1,583 |
