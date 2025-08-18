@@ -2,106 +2,197 @@
 
 ## Overview
 
-This section contains an interactive Streamlit web application that provides a user-friendly interface for fossil classification using the trained deep learning models from previous sections. The dashboard allows users to upload fossil images, get real-time predictions, explore the dataset, and visualize model performance.
+This section contains an interactive Streamlit web application that provides a user-friendly interface for fossil classification and 3D slice matching using deep learning models and advanced computer vision algorithms. The dashboard features a sophisticated dark theme interface with two main analysis tools for paleontological research.
 
 ## Purpose
 
-- Deploy trained models in an interactive web interface
-- Provide real-time fossil species classification
-- Enable dataset exploration and visualization
-- Demonstrate model capabilities to end users
-- Support research and educational activities
-- Facilitate model testing and validation
+- Deploy trained ensemble AI models in an interactive web interface
+- Provide real-time fossil species classification with confidence analysis
+- Enable 3D fossil slice matching using advanced similarity metrics
+- Support paleontological research with visual analysis tools
+- Demonstrate AI capabilities for fossil identification
+- Facilitate comparative analysis between 2D slices and 3D models
 
 ## Contents
 
 ### Main Application Files
 
-- **[`Home.py`](Home.py)** - Main Streamlit application entry point and home page
+- **[`Home.py`](Home.py)** - Main Streamlit application entry point and welcome page with platform overview
 - **[`Run_App.ipynb`](Run_App.ipynb)** - Jupyter notebook for launching the dashboard
 
 ### Application Pages
 
-- **[`pages/1_Fossil_DL_Classification.py`](pages/1_Fossil_DL_Classification.py)** - Main classification interface
-- **[`pages/2_Fossil Matching Slice.py`](pages/2_Fossil%20Matching%20Slice.py)** - Fossil slice matching and comparison tools
+- **[`pages/1_Fossil_DL_Classification.py`](pages/1_Fossil_DL_Classification.py)** - AI-powered fossil species classification interface
+- **[`pages/2_Fossil Matching Slice.py`](pages/2_Fossil%20Matching%20Slice.py)** - Advanced 3D fossil slice matching and similarity analysis
 
 ### Model Assets
 
-- **[`fossil_classifier_final/`](fossil_classifier_final/)** - Production model files copied from Section 3
-- **[`models/`](models/)** - Additional model artifacts and utilities
+- **[`fossil_classifier_final/`](fossil_classifier_final/)** - Production ensemble model files from Section 3
+- **[`models/`](models/)** - 3D fossil models in NIfTI format (194 .nii files) for slice matching
 
 ## Features
 
-### 🔬 Fossil Classification Interface
+### 🏠 Home Page (`Home.py`)
 
-#### Real-time Image Classification
-- **Drag & Drop Upload**: Easy image upload interface
-- **Instant Predictions**: Real-time species classification
-- **Confidence Scores**: Probability distribution across all species
-- **Multiple Format Support**: PNG, JPG, JPEG image formats
+The main landing page provides:
 
-#### Advanced Analysis Tools
-- **Prediction Confidence**: Visual confidence indicators
-- **Top-N Predictions**: Shows top 3 most likely species
-- **Model Comparison**: Compare predictions across different models
-- **Batch Processing**: Classify multiple images simultaneously
+#### Welcome Interface
+- **Project Overview**: Comprehensive introduction to the Fossil AI Hub platform
+- **Platform Capabilities**: Two main analysis tools (AI Classification & 3D Slice Matching)  
+- **Navigation Guide**: Step-by-step instructions for using both applications
+- **Quick Access**: Navigation buttons to classification and slice matching pages
+- **Technology Highlights**: Information about deep learning and computer vision technologies used
 
-### 📊 Dataset Exploration
+#### Key Components
+- **Sophisticated Dark Theme**: Custom CSS with gradient backgrounds and animated elements
+- **Interactive Cards**: Feature cards with hover effects highlighting platform capabilities
+- **Real-time Info**: Current time display (KAUST timezone) and author information
+- **Responsive Design**: Mobile-optimized interface with professional styling
 
-#### Interactive Data Visualization
-- **Species Distribution**: Visual breakdown of dataset composition
-- **Sample Gallery**: Browse representative samples from each species
-- **Dataset Statistics**: Comprehensive dataset metrics
-- **Quality Metrics**: Image quality and preprocessing information
+### 🦕 AI-Powered Fossil Classification (`pages/1_Fossil_DL_Classification.py`)
 
-#### Educational Content
-- **Species Information**: Detailed descriptions of each fossil species
-- **Morphological Features**: Key identifying characteristics
-- **Historical Context**: Geological and paleontological background
+Advanced deep learning interface for fossil species identification:
 
-### 🎯 Model Performance Dashboard
+#### Core Classification Features
+- **Ensemble Model**: ConvNeXt-Large + EfficientNet-V2 architecture for robust predictions
+- **12 Species Support**: Classification of benthic foraminifera species
+- **Real-time Processing**: Instant image analysis with sophisticated preprocessing
+- **Interactive Segmentation**: Live preview with adjustable threshold sensitivity slider
 
-#### Performance Metrics
-- **Accuracy Metrics**: Overall and per-class performance
-- **Confusion Matrix**: Interactive confusion matrix visualization
-- **ROC Curves**: Receiver Operating Characteristic analysis
-- **Training History**: Model training progress visualization
+#### Image Processing Pipeline
+```python
+# Processing methods available:
+- Auto-Process: Automatic fossil detection and segmentation
+- Manual Crop: User-defined region selection with bounding box tool
+- Threshold Adjustment: Fine-tunable segmentation sensitivity (-50 to +50)
+- Live Preview: Real-time visualization of processed image fed to AI model
+```
 
-#### Model Comparison Tools
-- **Architecture Comparison**: Side-by-side model performance
-- **Inference Speed**: Timing benchmarks for different models
-- **Resource Usage**: Memory and computational requirements
+#### Advanced Analysis Dashboard
+- **Confidence Metrics**: Detailed probability distribution across all species
+- **Top Predictions**: Ranked classification results with confidence percentages
+- **Statistical Analysis**: Entropy, cumulative confidence, and distribution metrics
+- **Interactive Visualizations**: 
+  - Full species probability distribution with color-coded confidence levels
+  - Top 10 predictions with ranking visualization
+  - Confidence distribution histogram with interpretation guides
+
+#### Technical Specifications
+- **Input Size**: 384×384 pixels with automatic padding and cropping
+- **Model Architecture**: PatchEnsemble with weak learner detection
+- **Preprocessing**: Adaptive segmentation with structure preservation
+- **Output Format**: Probability distributions with detailed statistical analysis
+
+### 🎯 3D Fossil Slice Matching (`pages/2_Fossil Matching Slice.py`)
+
+Sophisticated 3D correspondence analysis using multiple similarity metrics:
+
+#### Core Matching Technology
+- **Multi-Metric Similarity**: SSIM (Structural Similarity Index), NCC (Normalized Cross-Correlation), and Dice Score
+- **3D Model Database**: 97 NIfTI (.nii) format 3D fossil models from multiple species
+- **Rotation Invariance**: Testing across multiple rotation angles (20°, 40°, 60°, 80°, 100°, 120°, 140°, 160°)
+- **ORB Feature Matching**: Additional feature-based similarity analysis
+
+#### Advanced Processing Pipeline
+```python
+# Two-stage matching process:
+Stage 1: Multi-Candidate Coarse Search
+- Dice coefficient and Hu Moments analysis
+- Cross-sectional slice extraction from 3D models
+- Fossil content detection and validation
+
+Stage 2: Fine-tuning with Rotation Analysis  
+- SSIM and NCC metric computation
+- Rotation testing for orientation invariance
+- ORB feature point matching
+- Combined scoring with weighted metrics
+```
+
+#### Application Interface Structure
+**Tab 1: Upload & Setup**
+- Enhanced file uploader with drag-and-drop support
+- Automatic image preprocessing and segmentation
+- Structure-preserving fossil extraction
+- Real-time processing feedback
+
+**Tab 2: Model Selection**  
+- Built-in 3D model library browsing (97 models)
+- Species-based filtering and selection
+- Custom model upload capability (.nii/.nii.gz format)
+- Model metadata display and statistics
+
+**Tab 3: Run Analysis**
+- Configurable similarity metrics weighting
+- Batch processing across selected models  
+- Real-time progress tracking with detailed logging
+- Multi-threaded analysis for performance
+
+**Tab 4: Results & Stats**
+- Comprehensive matching results with ranked similarity scores
+- Side-by-side visual comparison of 2D slice vs. 3D model slices
+- Statistical analysis of matching confidence
+- Species identification based on best matches
+
+**Tab 5: 3D Visualization**
+- Interactive 3D model exploration
+- Slice-by-slice correspondence visualization
+- Rotation and orientation analysis display
+- Match highlighting and annotation
 
 ## Getting Started
 
 ### Prerequisites
 
-Ensure you're in the recommended Docker environment and have completed Sections 1-3:
+Ensure you have the required environment set up with the necessary dependencies. The application requires:
 
-```bash
-docker run --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --rm -p 10000:8888 -p 8501:8501 -v ${PWD}:/workspace/mycode abdelghafour1/ngc_tf_rapids_25_01_vscode_torch:2025-v3 jupyter lab --ip=0.0.0.0 --allow-root --NotebookApp.custom_display_url=http://$(hostname):10000
-```
+- **Python 3.8+** with TensorFlow 2.13+
+- **Streamlit 1.25+** for the web interface
+- **PyTorch** for 3D similarity computations
+- **nibabel** for NIfTI medical imaging format support
+- **OpenCV, scikit-image** for image processing
+- **Plotly** for interactive visualizations
 
 ### Installation and Setup
+
+### Recommended Environment
+
+```bash
+# Use the provided Docker container for best compatibility
+docker run --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
+  --rm -p 10000:8888 -p 8501:8501 -v ${PWD}:/workspace/mycode \
+  abdelghafour1/ngc_tf_rapids_25_01_vscode_torch:2025-v3 \
+  jupyter lab --ip=0.0.0.0 --allow-root \
+  --NotebookApp.custom_display_url=http://$(hostname):10000
+```
 
 #### 1. Verify Model Files
 
 ```bash
 cd 4_Dashboard_App
 
-# Ensure the production model is available
+# Ensure the ensemble AI model is available
 ls fossil_classifier_final/
-# Should contain: model.keras, class_names.json, etc.
+# Should contain: model.keras, class_names.json
 
-# If missing, copy from Section 3 results
-cp -r ../3_Results/fossil_classifier_final/* fossil_classifier_final/
+# Verify 3D fossil models are present
+ls models/
+# Should contain: 194 .nii files (3D fossil models)
 ```
 
 #### 2. Install Required Dependencies
 
 ```bash
-# Install Streamlit and dependencies (if not already installed)
-pip install streamlit plotly seaborn pillow
+# Install core Streamlit dependencies
+pip install streamlit plotly seaborn pillow pandas
+
+# Install deep learning libraries  
+pip install tensorflow torch torchvision
+
+# Install scientific computing and image processing
+pip install opencv-python scikit-image nibabel scipy numpy
+
+# Optional: Enhanced UI components
+pip install streamlit-extras
 ```
 
 #### 3. Launch the Dashboard
@@ -110,7 +201,7 @@ pip install streamlit plotly seaborn pillow
 
 ```bash
 cd 4_Dashboard_App
-streamlit run Home.py --server.port 8501 --server.address 0.0.0.0
+streamlit run Home.py --server.maxUploadSize 9000 --server.maxMessageSize 10000
 ```
 
 **Method 2: Using the Jupyter notebook**
@@ -124,394 +215,183 @@ jupyter lab Run_App.ipynb
 
 Once launched, access the dashboard at:
 - **Local**: `http://localhost:8501`
-- **Docker**: `http://$(hostname):8501`
 - **Network**: `http://[your-ip]:8501`
 
-## Application Structure
+### Application Workflow
 
-### Home Page (`Home.py`)
+#### For AI Classification:
+1. **Navigate** to "Fossil DL Classification" page via sidebar
+2. **Upload** your fossil image (JPG, PNG, TIFF formats)
+3. **Choose** processing method (Auto-Process or Manual Crop)
+4. **Adjust** segmentation threshold using the sensitivity slider
+5. **Preview** the processed image in real-time
+6. **Classify** and explore detailed probability analysis
 
-The main landing page provides:
+#### For 3D Slice Matching:
+1. **Navigate** to "3D Fossil Slice Matcher" page via sidebar  
+2. **Upload** your 2D fossil slice image
+3. **Select** 3D models from the built-in database (97 models available)
+4. **Configure** similarity metrics (SSIM, NCC, Dice weights)
+5. **Run** comprehensive matching analysis
+6. **Explore** results with 3D visualization and statistical analysis
 
-```python
-# Key features of Home.py:
-- Project overview and introduction
-- Navigation to different app sections
-- Quick start guide for new users
-- Model performance summary
-- Dataset statistics overview
-```
-
-#### Welcome Interface
-- **Project Description**: Overview of the fossil classification project
-- **Model Information**: Details about the ensemble model used
-- **Usage Instructions**: Step-by-step guide for new users
-- **Performance Highlights**: Key accuracy metrics and achievements
-
-### Classification Page (`pages/1_Fossil_DL_Classification.py`)
-
-Main classification interface with:
-
-#### Upload Interface
-```python
-# File upload component
-uploaded_file = st.file_uploader(
-    "Choose a fossil image...",
-    type=['png', 'jpg', 'jpeg'],
-    help="Upload a fossil image for classification"
-)
-```
-
-#### Prediction Display
-```python
-# Prediction results visualization
-if prediction_made:
-    st.subheader("🔍 Classification Results")
-    
-    # Top prediction
-    st.metric(
-        label="Predicted Species",
-        value=predicted_species,
-        delta=f"{confidence:.1%} confidence"
-    )
-    
-    # Probability distribution
-    plot_prediction_probabilities(predictions, class_names)
-    
-    # Additional insights
-    display_species_information(predicted_species)
-```
-
-#### Advanced Features
-- **Image Preprocessing Visualization**: Show preprocessing steps
-- **Attention Maps**: Highlight important image regions (if available)
-- **Similar Samples**: Find similar fossils in the training dataset
-- **Export Results**: Download prediction results
-
-### Fossil Matching Page (`pages/2_Fossil Matching Slice.py`)
-
-Specialized tool for comparing fossil slices:
-
-#### Slice Comparison
-- **Side-by-side Display**: Compare multiple fossil images
-- **Similarity Scoring**: Quantitative similarity measures
-- **Feature Matching**: Highlight matching morphological features
-- **Database Search**: Find similar specimens in the dataset
-
-#### Analysis Tools
-- **Morphometric Analysis**: Automated shape and size measurements
-- **Texture Analysis**: Surface pattern comparison
-- **3D Reconstruction Preview**: Link to original 3D data
-- **Expert Annotations**: Add and view expert comments
-
-## Configuration and Customization
-
-### Model Configuration
-
-```python
-# config/model_config.py
-MODEL_CONFIG = {
-    "model_path": "fossil_classifier_final/model.keras",
-    "class_names_path": "fossil_classifier_final/class_names.json",
-    "preprocessing": {
-        "target_size": (224, 224),
-        "rescale": 1.0/255.0,
-        "color_mode": "rgb"
-    },
-    "prediction": {
-        "batch_size": 1,
-        "top_k": 3,
-        "confidence_threshold": 0.5
-    }
-}
-```
-
-### UI Customization
-
-```python
-# config/ui_config.py
-UI_CONFIG = {
-    "page_title": "Fossil Classification Dashboard",
-    "page_icon": "🦴",
-    "layout": "wide",
-    "theme": {
-        "primaryColor": "#1f77b4",
-        "backgroundColor": "#ffffff",
-        "secondaryBackgroundColor": "#f0f2f6"
-    },
-    "sidebar": {
-        "show_species_info": True,
-        "show_model_metrics": True,
-        "show_dataset_stats": True
-    }
-}
-```
-
-### Species Information Database
-
-```python
-# data/species_info.json
-{
-    "Alveolina": {
-        "description": "Large benthic foraminifera...",
-        "geological_age": "Paleocene to Eocene",
-        "morphology": "Elongated, fusiform shape...",
-        "distribution": "Tropical shallow marine environments",
-        "identifying_features": [
-            "Complex internal structure",
-            "Spiral arrangement of chambers",
-            "Thick walls"
-        ]
-    },
-    // ... other species
-}
-```
 
 ## Advanced Features
 
-### Model Ensemble Integration
+### Real-time Image Processing
 
-The dashboard supports multiple model backends:
+The classification system implements sophisticated preprocessing:
 
 ```python
-class ModelEnsemble:
-    def __init__(self):
-        self.main_model = load_model("fossil_classifier_final/model.keras")
-        self.backup_models = {
-            "convnext": load_model("models/convnext_best.keras"),
-            "effv2s": load_model("models/effv2s_best.keras")
-        }
+# Live segmentation with adjustable sensitivity
+def segment_image(img_gray, threshold_adjustment=0.0):
+    """
+    Structure-preserving fossil segmentation with user control
+    - Otsu thresholding with manual adjustment (-50 to +50)
+    - Morphological operations for noise reduction
+    - Connected component analysis for main fossil isolation
+    - Real-time preview generation for user feedback
+    """
     
-    def predict_ensemble(self, image):
-        # Weighted ensemble prediction
-        predictions = []
-        weights = [0.6, 0.25, 0.15]  # Main, ConvNeXt, EfficientNet
-        
-        for model, weight in zip(self.models, weights):
-            pred = model.predict(image)
-            predictions.append(pred * weight)
-        
-        return np.sum(predictions, axis=0)
+# Automatic bounding box detection and cropping
+@tf.autograph.experimental.do_not_convert  
+def crop_to_bbox(img):
+    """
+    TensorFlow-optimized automatic fossil detection
+    - Edge detection and coordinate extraction
+    - Dynamic padding and resizing to canonical size
+    - Handles edge cases and empty detections
+    """
 ```
 
-### Real-time Performance Monitoring
+### Multi-Metric 3D Similarity Analysis
 
 ```python
-def track_prediction_metrics():
-    """Monitor dashboard usage and model performance"""
-    metrics = {
-        "total_predictions": st.session_state.get('prediction_count', 0),
-        "average_confidence": st.session_state.get('avg_confidence', 0),
-        "most_predicted_species": st.session_state.get('top_species', []),
-        "processing_time": st.session_state.get('avg_time', 0)
-    }
-    return metrics
+# Advanced similarity computation pipeline
+class SimilarityAnalyzer:
+    def compute_comprehensive_similarity(self, slice_2d, model_3d):
+        """
+        Multi-stage analysis pipeline:
+        1. Cross-sectional slice extraction from 3D model
+        2. Structural Similarity Index (SSIM) computation
+        3. Normalized Cross-Correlation (NCC) analysis  
+        4. Dice coefficient for overlap measurement
+        5. ORB feature matching for geometric correspondence
+        6. Rotation invariance testing across 8 angles
+        7. Combined weighted scoring for final ranking
+        """
 ```
 
-### Batch Processing Interface
+### Interactive Visualization System
+
+The dashboard provides sophisticated data visualization capabilities:
 
 ```python
-def batch_classification():
-    """Process multiple images simultaneously"""
-    uploaded_files = st.file_uploader(
-        "Upload multiple fossil images",
-        type=['png', 'jpg', 'jpeg'],
-        accept_multiple_files=True
-    )
+# Plotly-based interactive charts with dark theme optimization
+def create_probability_visualization(predictions, class_names):
+    """
+    Multi-tab visualization system:
+    - Full distribution bar chart with color-coded confidence levels
+    - Top 10 predictions with ranking and medal system  
+    - Confidence histogram with statistical interpretation
+    - Real-time updating with smooth transitions
+    """
     
-    if uploaded_files and st.button("Classify All"):
-        results = []
-        progress_bar = st.progress(0)
-        
-        for i, file in enumerate(uploaded_files):
-            result = classify_single_image(file)
-            results.append(result)
-            progress_bar.progress((i + 1) / len(uploaded_files))
-        
-        display_batch_results(results)
+# 3D model visualization and slice correspondence
+def visualize_3d_correspondence(model_data, matching_results):
+    """
+    Advanced 3D visualization features:
+    - Interactive 3D fossil model rendering
+    - Slice-by-slice correspondence highlighting
+    - Rotation analysis visualization
+    - Match confidence overlay mapping
+    """
 ```
 
 ## Performance Optimization
 
-### Caching Strategies
+### Caching and Memory Management
 
 ```python
-@st.cache_resource
-def load_model():
-    """Cache model loading for faster startup"""
-    return tf.keras.models.load_model("fossil_classifier_final/model.keras")
-
-@st.cache_data
-def load_species_info():
-    """Cache species information database"""
-    with open("data/species_info.json", 'r') as f:
-        return json.load(f)
-
-@st.cache_data
-def preprocess_image(image_data):
-    """Cache image preprocessing results"""
-    # Preprocessing logic
-    return processed_image
-```
-
-### Memory Management
-
-```python
-def optimize_memory_usage():
-    """Implement memory optimization strategies"""
-    # Clear TensorFlow session periodically
-    if st.session_state.get('prediction_count', 0) % 100 == 0:
-        tf.keras.backend.clear_session()
+# Strategic caching for improved performance
+@st.cache_resource(show_spinner="Loading AI model...")
+def load_ensemble_model():
+    """Cache TensorFlow model loading with optimized memory usage"""
     
-    # Garbage collection for large images
-    import gc
-    gc.collect()
+@st.cache_data
+def load_3d_model_database():
+    """Cache 3D model metadata for faster browsing"""
+
+# Automatic memory management
+def optimize_memory_usage():
+    """
+    - Periodic TensorFlow session clearing
+    - Garbage collection for large 3D volumes
+    - Session state cleanup for performance
+    """
 ```
 
-## Deployment Options
+### GPU Acceleration
 
-### Local Development
-
-```bash
-# Development mode with auto-reload
-streamlit run Home.py --server.runOnSave true
+```python
+# Optimized device configuration with fallbacks
+try:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Mixed precision for faster inference
+    tf.keras.mixed_precision.set_global_policy("mixed_float16")
+except RuntimeError:
+    # Graceful fallback to CPU processing
+    device = torch.device("cpu")
 ```
-
-### Production Deployment
-
-```bash
-# Production mode with optimizations
-streamlit run Home.py \
-    --server.port 8501 \
-    --server.address 0.0.0.0 \
-    --server.maxUploadSize 50 \
-    --server.enableCORS false \
-    --server.enableXsrfProtection true
-```
-
-### Docker Deployment
-
-```dockerfile
-# Dockerfile for standalone deployment
-FROM tensorflow/tensorflow:2.13.0-gpu
-
-COPY requirements.txt /app/
-RUN pip install -r /app/requirements.txt
-
-COPY . /app/
-WORKDIR /app
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "Home.py", "--server.port=8501", "--server.address=0.0.0.0"]
-```
-
-## Connection to Other Sections
-
-### Input Dependencies
-- **From Section 3**: Production model (`fossil_classifier_final/`)
-- **Model Artifacts**: Trained models and evaluation metrics
-- **Dataset Information**: Species data and sample images
-
-### Integration Points
-- **Model Loading**: Seamless integration with TensorFlow models
-- **Preprocessing Pipeline**: Consistent with training preprocessing
-- **Performance Metrics**: Real-time model performance tracking
-
-## User Guide
-
-### For Researchers
-
-1. **Upload Test Images**: Use the classification interface for quick species identification
-2. **Batch Analysis**: Process multiple specimens simultaneously
-3. **Export Results**: Download predictions for further analysis
-4. **Compare Models**: Evaluate different model architectures
-
-### For Educators
-
-1. **Interactive Learning**: Explore fossil diversity through the interface
-2. **Visual Examples**: Use the gallery for teaching morphological features
-3. **Real-time Demos**: Demonstrate AI classification in classroom settings
-4. **Species Information**: Access detailed paleontological information
-
-### For Students
-
-1. **Hands-on Experience**: Practice fossil identification with AI assistance
-2. **Learn by Comparison**: Compare your identifications with AI predictions
-3. **Explore Dataset**: Browse the comprehensive fossil image collection
-4. **Understand AI**: Learn how deep learning works in paleontology
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Model Loading Errors**: Verify model files are in correct locations
-2. **Image Upload Issues**: Check file formats and size limits
-3. **Slow Predictions**: Monitor GPU/CPU usage and memory
-4. **UI Rendering Issues**: Clear browser cache and restart Streamlit
-
-### Performance Issues
-
-1. **Memory Leaks**: Restart app periodically for long sessions
-2. **Slow Loading**: Implement additional caching strategies
-3. **Concurrent Users**: Consider scaling solutions for multiple users
-4. **Large Images**: Implement client-side image compression
-
-## Future Enhancements
-
-### Planned Features
-
-1. **3D Visualization**: Integration with original 3D fossil data
-2. **Uncertainty Quantification**: Advanced confidence estimation
-3. **Active Learning**: Collect user feedback for model improvement
-4. **Mobile Optimization**: Enhanced mobile interface design
-5. **API Endpoints**: REST API for programmatic access
-
-### Advanced Analytics
-
-1. **Usage Analytics**: Track user behavior and popular features
-2. **Model Drift Detection**: Monitor model performance over time
-3. **A/B Testing**: Compare different model versions
-4. **User Feedback Integration**: Continuous learning from expert corrections
-
-## Contributing
-
-### Adding New Features
-
-1. **Page Structure**: Follow existing page template structure
-2. **State Management**: Use `st.session_state` for data persistence
-3. **Error Handling**: Implement comprehensive error handling
-4. **Documentation**: Update README with new features
-
-### Model Updates
-
-1. **Model Replacement**: Replace models in `fossil_classifier_final/`
-2. **Version Control**: Maintain model version tracking
-3. **Backward Compatibility**: Ensure interface compatibility
-4. **Performance Testing**: Validate new model performance
 
 ## Technical Specifications
 
 ### System Requirements
 
-- **Python**: 3.8+
-- **TensorFlow**: 2.13+
-- **Streamlit**: 1.25+
-- **Memory**: 8GB+ RAM recommended
+- **Python**: 3.8+ with scientific computing stack
+- **Deep Learning**: TensorFlow 2.13+, PyTorch 1.12+
+- **Web Framework**: Streamlit 1.25+ with enhanced components
+- **Image Processing**: OpenCV 4.5+, scikit-image 0.19+
+- **3D Analysis**: nibabel for NIfTI format support
+- **Memory**: 16GB+ RAM recommended (32GB+ for large 3D models)
 - **GPU**: Optional but recommended for faster inference
 
-### Browser Support
+### Browser Compatibility
 
-- **Chrome**: 90+ (recommended)
-- **Firefox**: 85+
-- **Safari**: 14+
-- **Edge**: 90+
+- **Chrome**: 90+ (recommended for best performance)
+- **Firefox**: 85+ (full feature support)
+- **Safari**: 14+ (WebGL required for 3D visualization)
+- **Edge**: 90+ (Chromium-based versions)
 
-### Performance Benchmarks
 
-- **Model Loading**: ~5-10 seconds initial load
-- **Image Processing**: ~50-200ms per image
-- **UI Responsiveness**: <100ms for most interactions
-- **Concurrent Users**: Up to 10 users (single instance)
+## Connection to Other Sections
 
-This dashboard represents the culmination of the entire fossil classification pipeline, providing an accessible interface for utilizing the sophisticated AI models developed in the previous sections.
+### Input Dependencies
+- **From Section 3**: Production ensemble model (`fossil_classifier_final/`)
+- **From Section 1**: 3D NIfTI fossil models (`models/` directory with 194 files)
+- **Model Architecture**: ConvNeXt-Large + EfficientNet-V2 ensemble
+- **Species Coverage**: 12 benthic foraminifera classes
+
+### Integration Points
+- **Seamless Model Loading**: Direct integration with trained TensorFlow models
+- **Preprocessing Consistency**: Same pipeline as training (crop_to_bbox, segmentation)
+- **Real-time Analysis**: Live feedback and interactive parameter adjustment
+- **3D Correspondence**: Advanced similarity metrics for slice-to-model matching
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Model Loading Errors**: Verify `fossil_classifier_final/model.keras` exists
+2. **3D Model Access**: Ensure `models/` directory contains .nii files (97 total)
+3. **Memory Issues**: Reduce batch size or restart application periodically
+4. **Slow Performance**: Check GPU availability and optimize memory settings
+
+### Performance Issues
+
+1. **Large Image Processing**: Application automatically handles image resizing
+2. **3D Model Loading**: Models are loaded on-demand to optimize memory
+3. **Concurrent Users**: Designed for single-user analysis sessions
+4. **Browser Memory**: Clear browser cache if visualization becomes sluggish
+
+This dashboard represents the culmination of the entire fossil classification pipeline, providing an accessible and sophisticated interface for utilizing advanced AI models and 3D analysis techniques in paleontological research.
