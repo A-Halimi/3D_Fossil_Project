@@ -1,0 +1,20 @@
+--- Class-Aware Weighted Ensemble Report ---
+                precision    recall  f1-score   support
+
+     Alveolina     0.9465    0.9940    0.9697      5129
+      Arumella     0.9971    0.9413    0.9684      2163
+Ataxophragmium     0.9922    0.9894    0.9908      4898
+ Baculogypsina     0.9718    0.2433    0.3892      2980
+  Chrysalidina     0.9149    0.9930    0.9523      5111
+   Coskinolina     0.9753    0.9269    0.9505      5060
+   Elphidiella     0.9100    0.9950    0.9506      3385
+      Fallotia     0.9972    0.9998    0.9985      5009
+    Lockhartia     0.9698    0.9994    0.9844      5362
+       Minoxia     0.9732    0.9699    0.9716      3557
+    Orbitoides     0.6844    0.9001    0.7775      5015
+  Rhapydionina     0.9954    0.9600    0.9774      3802
+
+      accuracy                         0.9290     51471
+     macro avg     0.9440    0.9093    0.9067     51471
+  weighted avg     0.9390    0.9290    0.9195     51471
+

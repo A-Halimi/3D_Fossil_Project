@@ -1,0 +1,19 @@
+--- Patched Ensemble Report ---
+                precision    recall  f1-score   support
+
+     Alveolina     0.9504    0.9973    0.9733      5129
+      Arumella     0.9934    0.9806    0.9870      2163
+Ataxophragmium     0.9959    0.9890    0.9924      4898
+ Baculogypsina     0.9994    0.6030    0.7522      2980
+  Chrysalidina     0.9198    0.9990    0.9578      5111
+   Coskinolina     0.9786    0.9858    0.9822      5060
+   Elphidiella     0.9558    0.9962    0.9756      3385
+      Fallotia     0.9940    0.9992    0.9966      5009
+    Lockhartia     0.9685    0.9998    0.9839      5359
+       Minoxia     0.9922    0.8949    0.9410      3557
+    Orbitoides     0.8270    0.9216    0.8717      5015
+  Rhapydionina     0.9899    0.9761    0.9829      3802
+
+      accuracy                         0.9564     51468
+     macro avg     0.9638    0.9452    0.9497     51468
+  weighted avg     0.9594    0.9564    0.9543     51468
