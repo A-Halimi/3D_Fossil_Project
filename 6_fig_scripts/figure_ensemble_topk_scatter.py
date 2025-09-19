@@ -133,4 +133,55 @@ latex_df = all_df.pivot_table(index='class', columns='ensemble', values=['precis
 latex_str = latex_df.to_latex(float_format="{:.3f}".format, multirow=True, na_rep="--")
 print(latex_str)
 
+# get the precision, recall, f1 for only Orbitoides and Baculogypsina
+print("\nLaTeX table for Orbitoides and Baculogypsina only:\n")
+latex_df = all_df[all_df['class'].isin(['Orbitoides', 'Baculogypsina'])].pivot_table(index='class', columns='ensemble', values=['precision', 'recall', 'f1'])
+latex_str = latex_df.to_latex(float_format="{:.3f}".format, multirow=True, na_rep="--")
+print(latex_str)
+
+#using the dataframe lets plot the precision, recall, f1 for only Orbitoides and Baculogypsina
+# suggest the best plor for vizualization that is not a bar plot as there are only two classes
+# a scatter plot with lines connecting the points for each metric across ensembles
+# or a line plot with markers for each class across ensembles for each metric
+# or a grouped bar plot with bars for each class for each ensemble for each metric
+# or a heatmap with ensembles on x-axis, classes on y-axis, and color intensity representing the metric value
+# or a radar chart with axes for each ensemble and lines for each class
+# or a dot plot with ensembles on x-axis, classes on y-axis, and dot size representing the metric value
+
+fig, axes = plt.subplots(1, 3, figsize=(10, 6), sharey=True)
+palette = sns.color_palette('colorblind', n_colors=2)  # Only two classes
+classes_of_interest = ['Orbitoides', 'Baculogypsina']
+for ax, metric in zip(axes, metrics):
+    for cls in classes_of_interest:
+        data = long_dfs[metric][(long_dfs[metric]['class'] == cls) & (long_dfs[metric]['class'].isin(classes_of_interest))]
+        sns.lineplot(
+            data=data,
+            x='ensemble', y='value', label=cls,
+            marker='o',
+            color=palette[classes_of_interest.index(cls)],
+            ax=ax
+        )
+    ax.set_title(f'{metric.capitalize()}')
+    ax.set_xlabel('Ensemble')
+    if ax == axes[0]:
+        # ax.set_ylabel(metric.capitalize())
+        ax.set_ylabel('')
+
+    else:
+        ax.set_ylabel('')
+    ax.set_ylim(0, 1.05)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+    ax.grid(True, linestyle='--', alpha=0.7)
+    # Only show legend on the last subplot
+    if ax != axes[-1]:
+        ax.get_legend().remove()
+    else:
+        # ax.legend(title='Class', bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+plt.tight_layout(rect=[0, 0, 0.85, 1])
+# save the plot 
+plt.savefig('./plots/ensemble_topk_scatter_orbitoides_baculogypsina.svg')
+plt.show()
+
 
