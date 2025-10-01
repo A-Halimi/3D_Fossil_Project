@@ -39,3 +39,6 @@ plt.legend(title='Metric', loc='center left', bbox_to_anchor=(1.02, 0.5), frameo
 plt.tight_layout(pad=1.5)
 plt.savefig('./plots/model_comparison_metrics.svg')
 plt.show()
+
+# print the data frame for latex table
+print(df[['model','accuracy', 'macro_precision', 'macro_recall', 'macro_f1', 'top3', 'auc']].to_latex(index=False, float_format="%.4f"))
