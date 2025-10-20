@@ -45,7 +45,6 @@ def parse_classification_report(filepath):
             data.append([parts[0], None, None, parts[1], parts[2] if len(parts) > 2 else None])
         # Handle normal and avg rows (should have at least 4 columns)
         elif len(parts) >= 4:
-            print (parts)
             if 'macro' in parts[0] or 'weighted' in parts[0]:
                 # print("Found macro row:", parts)
                 support = parts[-1] if len(parts) > 4 else None
@@ -87,7 +86,7 @@ for metric in metrics:
     long_df = long_df.rename(columns={metric: 'value'})
     long_dfs[metric] = long_df
 
-# Set up subplots
+# # Set up subplots
 fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
 palette = sns.color_palette('colorblind', n_colors=all_df['class'].nunique())
 
@@ -130,12 +129,15 @@ plt.show()
 print("\nLaTeX table for all ensemble results (precision, recall, f1):\n")
 # Pivot to have ensemble as columns, index as class, and multiindex columns for metrics
 latex_df = all_df.pivot_table(index='class', columns='ensemble', values=['precision', 'recall', 'f1'])
+# round numeric results to 3 decimals for cleaner LaTeX output
+latex_df = latex_df.round(3)
 latex_str = latex_df.to_latex(float_format="{:.3f}".format, multirow=True, na_rep="--")
 print(latex_str)
 
 # get the precision, recall, f1 for only Orbitoides and Baculogypsina
 print("\nLaTeX table for Orbitoides and Baculogypsina only:\n")
 latex_df = all_df[all_df['class'].isin(['Orbitoides', 'Baculogypsina'])].pivot_table(index='class', columns='ensemble', values=['precision', 'recall', 'f1'])
+latex_df = latex_df.round(3)
 latex_str = latex_df.to_latex(float_format="{:.3f}".format, multirow=True, na_rep="--")
 print(latex_str)
 
