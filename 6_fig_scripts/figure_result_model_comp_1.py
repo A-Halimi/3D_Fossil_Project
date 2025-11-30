@@ -30,12 +30,14 @@ ax = sns.barplot(data=df_melted, x='model', y='Score', hue='Metric', palette=pal
 sns.despine(ax=ax)
 
 plt.ylim(0.8, 1.0)
-plt.title('Model Comparison Across Key Metrics', fontsize=13, weight='bold', pad=10)
-plt.ylabel('Score', fontsize=12, weight='bold')
-plt.xlabel('Model', fontsize=12, weight='bold')
+plt.title('Model Comparison Across Key Metrics', fontsize=20, weight='bold', pad=10)
+plt.xticks(rotation=45, fontsize=18)
+plt.yticks(fontsize=18)
+plt.ylabel('Score', fontsize=20, weight='bold')
+plt.xlabel('Model', fontsize=20, weight='bold')
 
 # Place legend outside the plot
-plt.legend(title='Metric', loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=False)
+plt.legend(title='Metric', loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=False , fontsize=18 , title_fontsize=20)
 plt.tight_layout(pad=1.5)
 plt.savefig('./plots/model_comparison_metrics.svg')
 plt.show()
