@@ -331,9 +331,9 @@ If you use this project in your research, please cite:
 ```bibtex
 @software{fossil_classification_2025,
   title={Deep Learning Pipeline for 3D Fossil Classification},
-  author={[Your Name/Team]},
+  author={Halimi, Abdelghafour and Alibrahim, Ali and Barradas-Bautista, Didier and Sicat, Ronell and Afifi, Abdulkader M.},
   year={2025},
-  url={https://github.com/[your-repo]/fossil-classification},
+  url={https://github.com/A-Halimi/3D_Fossil_Project},
   note={Comprehensive deep learning system for paleontological image analysis}
 }
 ```
