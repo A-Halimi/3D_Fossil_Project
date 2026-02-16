@@ -1,0 +1,69 @@
+services:
+  # Display access information
+  info:
+    image: alpine:latest
+    command: |
+      sh -c "
+        echo '========================================='
+        echo '🚀 Fossil AI Hub - Production Deployment'
+        echo '========================================='
+        echo ''
+        echo '📱 Frontend Access:'
+        echo '   Local:    http://localhost:8080'
+        echo '   Network:  http://$(hostname -I | awk '{print $$1}'):8080'
+        echo ''
+        echo '🔧 Backend API:'
+        echo '   Local:    http://localhost:5000'
+        echo '   Network:  http://$(hostname -I | awk '{print $$1}'):5000'
+        echo ''
+        echo '📊 Health Check:'
+        echo '   http://localhost:5000/api/health'
+        echo ''
+        echo '⏳ Services starting... Please wait for health checks to pass.'
+        echo '========================================='
+        echo ''
+      "
+    restart: "no"
+
+  backend:
+    image: abdelghafour1/fossil-ai-hub-backend:latest
+    ports:
+      - "5000:5000"
+    environment:
+      - FOSSIL_STAGE1_INVARIANCE=1
+      - FOSSIL_STAGE2_FAST=1
+      - FOSSIL_STAGE2_FLIPS=1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - fossil_uploads:/app/uploads
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  frontend:
+    image: abdelghafour1/fossil-ai-hub-frontend:new
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+volumes:
+  fossil_uploads:
+    driver: local
+
+networks:
+  default:
+    name: fossil-ai-production
